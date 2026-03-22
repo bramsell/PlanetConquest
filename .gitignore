@@ -20,6 +20,10 @@ Saved/
 # Backup Files
 Backup/
 
+# Starter Content (keep only Materials)
+Content/StarterContent/*
+!Content/StarterContent/Materials/
+
 # Python Cache (scripts will be included)
 __pycache__/
 *.pyc
