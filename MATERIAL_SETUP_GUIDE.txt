@@ -1,0 +1,77 @@
+MATERIAL SETUP GUIDE - Creating Color-Changeable Materials
+===========================================================
+
+Your code is ready to change colors dynamically, but you need to create materials 
+with "BaseColor" parameters for the meshes to use.
+
+STEP 1: Create a Basic Colored Material
+----------------------------------------
+1. In Content Browser, right-click → Create Basic Asset → Material
+2. Name it: M_TeamColor
+3. Double-click to open the Material Editor
+
+4. In the Material Editor:
+   - Drag from "Base Color" pin on the main node
+   - Type "VectorParameter" in the search and create it
+   - Name the parameter: BaseColor
+   - Set default color to white (1, 1, 1)
+   
+5. Save and close the Material Editor
+
+STEP 2: Apply Material to City
+-------------------------------
+1. In the outliner, find your CityActor in the level
+2. Select it
+3. In Details panel, find the "CityMesh" component
+4. Under Materials → Element 0, select M_TeamColor
+5. The city should now show the cyan color!
+
+STEP 3: Apply Material to Vehicles
+-----------------------------------
+Option A - Manual (for testing):
+1. Find a VehicleActor in the level
+2. Select it
+3. In Details panel, find "VehicleMesh"
+4. Under Materials → Element 0, select M_TeamColor
+
+Option B - Set as Default (recommended):
+1. Open the VehicleActor.cpp constructor
+2. After creating VehicleMesh, add code to load the material:
+   
+   static ConstructorHelpers::FObjectFinder<UMaterial> TeamColorMat(TEXT("/Game/M_TeamColor"));
+   if (TeamColorMat.Succeeded())
+   {
+       VehicleMesh->SetMaterial(0, TeamColorMat.Object);
+   }
+
+STEP 4: Apply Material to Resources
+------------------------------------
+Same as vehicles - either manually assign or add to ResourceActor.cpp constructor.
+
+ALTERNATIVE: Create Material Instance
+--------------------------------------
+If you want more control:
+
+1. Right-click M_TeamColor → Create Material Instance
+2. Name it: MI_TeamColor_Player (for cyan)
+3. In the instance, check the box next to BaseColor
+4. Set it to cyan (R:0, G:1, B:1)
+5. Assign this instance to your actors
+
+WHY THIS WORKS:
+--------------
+- The code calls CreateDynamicMaterialInstance(0) which creates a runtime copy
+- It then sets the "BaseColor" parameter to cyan/red/gray
+- The VectorParameter in your material receives this value
+- The mesh updates its color in real-time
+
+TROUBLESHOOTING:
+----------------
+- If colors don't show: Make sure the material has a VectorParameter named "BaseColor"
+- If material looks wrong: Check that Base Color is connected to the main material output
+- If changes don't persist: Use the constructor code to set default materials
+
+PERFORMANCE NOTE:
+-----------------
+Dynamic material instances have minimal overhead. Creating them once per actor 
+(which your code does) is perfectly fine for hundreds of units.

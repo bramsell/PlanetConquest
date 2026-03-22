@@ -1,0 +1,491 @@
+================================================================================
+PLANET CONQUEST - GAME DESIGN DOCUMENT
+================================================================================
+Project: Spore Civilization Stage + Multi-Planet Expansion
+Engine: Unreal Engine 5
+Focus: Emergent Narrative Through Adaptive Systems
+================================================================================
+
+================================================================================
+CORE DESIGN PHILOSOPHY
+================================================================================
+
+NOT building: Scripted RTS campaign
+BUILDING: Self-balancing system that continuously generates meaningful conflict
+
+Key Emotional Goals:
+- Sustained tension through uncertainty
+- Earned dominance after prolonged struggle
+- Emergent narrative from systemic pressure
+- Never trivial, never overwhelming
+
+Core Principle: DYNAMIC EQUILIBRIUM
+"The world pushes back. Victory is earned, not granted."
+
+================================================================================
+WHAT MAKES THIS GAME FEEL GOOD
+================================================================================
+
+Pattern #1: Sustained Tension From Living Systems
+- Conditions where tension emerges naturally
+- Player feels unsafe but not helpless
+- Curious but cautious
+- "Edge of safety" balance
+
+Pattern #2: Neck-and-Neck Power Struggle
+- Most engaging when evenly matched
+- Outcome is uncertain
+- Every decision matters
+- Certainty kills tension
+
+Pattern #3: Dynamic Pressure Escalation
+- Player progression vs World escalation
+- Both scale together
+- Progression remains meaningful
+
+Pattern #4: Player-Driven Outcomes
+- Real stakes
+- Emergent outcomes
+- Not scripted victory
+- Authentic investment
+
+Pattern #5: Progression Changes World Relationship
+- Early: Player is vulnerable
+- Later: Player becomes powerful
+- Same world feels different
+- Not just bigger numbers, new capabilities
+
+Pattern #6: Atmosphere as Emotional Amplifier
+- Music, sound, lighting multiply immersion
+- Systems without atmosphere feel mechanical
+- Atmosphere makes systems feel alive
+
+Pattern #7: Meaningful Resource Constraints
+- When resources matter, decisions matter
+- Scarcity creates meaning
+- Abundance kills emotional weight
+
+Pattern #8: Open-Ended Systems With Emergent Narrative
+- Personal narrative ownership
+- Player lives the story, doesn't watch it
+
+Pattern #9: Perpetual Partial Vulnerability
+- Never completely safe, even when strong
+- Maintains engagement
+- Total safety = disengagement
+
+================================================================================
+THE EQUILIBRIUM ENGINE (HEART OF THE GAME)
+================================================================================
+
+Central System:
+"Continuously measure player's real power and adjust universe's 
+resistance to match - not perfectly, not instantly, but gradually."
+
+This keeps player in "neck-and-neck" zone.
+
+PLAYER STRENGTH SCORE (Composite Metric):
+
+PlayerStrengthScore = 
+    (MilitaryPower × 0.4)
+  + (EconomicOutput × 0.3)
+  + (ProductionCapacity × 0.2)
+  + (TerritoryControl × 0.1)
+
+Where:
+- MilitaryPower = Unit count + Tech level + Veterancy
+- EconomicOutput = Resource income per minute
+- ProductionCapacity = Factory count + Build speed
+- TerritoryControl = Cities + Planets owned
+
+UNIVERSE STRENGTH SCORE:
+
+Each AI faction has FactionStrengthScore
+Galaxy tracks GlobalPressureLevel
+
+TENSION BAND (MOST IMPORTANT MECHANIC):
+
+IdealOpponentStrength = PlayerStrengthScore × Random(0.85 → 1.15)
+
+Creates opponents that are:
+- Sometimes slightly weaker
+- Sometimes slightly stronger
+- Never trivial or impossible
+- Constant uncertainty
+
+ADAPTATION TIMING:
+
+AdaptationDelay = 10-30 minutes
+
+When player grows stronger:
+1. Player feels powerful temporarily
+2. Delay period passes
+3. New threats emerge
+4. Natural story arc: Rise → Dominance → Resistance → Struggle → Victory
+5. Repeat forever
+
+================================================================================
+GAME STRUCTURE
+================================================================================
+
+THREE LAYERS:
+
+1. PLANETARY LAYER (Top-Down 2D RTS)
+   - City building
+   - Resource management
+   - Land combat (Spore civ stage style)
+   - Unit production
+
+2. SYSTEM LAYER (2D Star System Map)
+   - Fleet movement
+   - Strategic positioning
+   - Planet-to-planet combat
+   - Invasion coordination
+
+3. GALACTIC LAYER (Strategic Overview)
+   - Multiple star systems
+   - Territory control
+   - Faction relations
+   - Long-term planning
+
+PROGRESSION ARC:
+
+Phase 1: Single Planet Start
+- One city on home planet
+- Local rivals (AI factions)
+- Expand across planet surface
+- Build infrastructure
+
+Phase 2: Space Capability
+- Research space tech
+- Build orbital facilities
+- Gain inter-planetary capability
+- First expansion opportunity
+
+Phase 3: Multi-Planet Empire
+- Invade/colonize new planets
+- Manage multiple fronts
+- Space fleet combat
+- Planetary defense systems
+
+Phase 4: Galactic Expansion
+- Multiple star systems
+- Complex strategic positioning
+- Major rival empires
+- Never-ending equilibrium
+
+================================================================================
+CORE SYSTEMS
+================================================================================
+
+SYSTEM 1: RISK-WEIGHTED PLANET SELECTION
+
+Each Planet Has Visible Threat Level:
+- Threat Level: Low (Weak defenders, easy conquest)
+- Threat Level: Moderate (Fair fight)
+- Threat Level: High (Strong opposition)
+- Threat Level: Extreme (Overwhelming force)
+
+Player chooses their own risk:
+- Play safe, expand slowly
+- Gamble on high-risk invasions
+- Emergent narrative from these choices
+
+SYSTEM 2: EXPANSION = STRENGTH + VULNERABILITY
+
+Every new planet increases:
++ Resource income
++ Production capacity
+BUT ALSO:
++ Border surface area
++ Attack vectors
++ Defense requirements
+
+Prevents runaway snowballing.
+
+SYSTEM 3: INDEPENDENT AI FACTIONS
+
+AI factions are NOT static puppets:
+- Invade planets independently
+- Fight each other
+- Gain/lose strength over time
+- Galaxy evolves with or without player
+
+Creates emergent situations:
+- Rival becomes dominant unexpectedly
+- Two powers weaken each other
+- Weak faction becomes dangerous later
+
+SYSTEM 4: PARTIAL INFORMATION (Strategic Fog of War)
+
+Player never sees full galaxy strength.
+Only estimates:
+
+"Planet: Kepler-22b
+ Threat: Estimated High
+ Last Scanned: 20 minutes ago
+ Status: UNKNOWN"
+
+Uncertainty creates tension.
+
+SYSTEM 5: COMBAT VARIANCE
+
+Even matched battles have variance:
+- Accuracy randomness
+- Target selection randomness
+- Reinforcement timing variance
+
+Results:
+- Unexpected victories
+- Unexpected defeats
+- Personal stories emerge
+
+SYSTEM 6: PERMANENT MILD VULNERABILITY
+
+Even when powerful, player remains attackable:
+- Occasional raids
+- Border skirmishes
+- Surprise invasions
+
+Not overwhelming.
+Just enough to maintain alertness.
+
+SYSTEM 7: NO DIFFICULTY SETTINGS
+
+NO Easy/Medium/Hard modes.
+
+Instead: Dynamic equilibrium scaling
+- Game adapts automatically
+- Each playthrough unique
+- Always challenging, never unfair
+
+SYSTEM 8: RECOVERY WINDOWS
+
+Player must recover from losses:
+- Safe interior planets
+- Economic recovery period
+- Reduced attack frequency after major loss
+
+Prevents tension → frustration.
+Creates emotional pacing.
+
+SYSTEM 9: POWER SPIKES
+
+Occasional breakthroughs:
+- New unit tech
+- New production method
+- New weapon type
+
+Temporarily shift equilibrium in player favor.
+Universe gradually adapts.
+Creates cycles of empowerment and challenge.
+
+CRITICAL RULE:
+"Never let equilibrium fully resolve"
+- Never completely safe
+- Never completely hopeless
+- Always slightly unstable
+- Always slightly uncertain
+
+================================================================================
+SPACE COMBAT DESIGN
+================================================================================
+
+CONCEPT: Top-Down 2D Star System Map
+
+When invading another planet:
+1. Enter system view (2D tactical map)
+2. Position space fleets
+3. Break through orbital defenses
+4. Land ground forces at strategic site
+5. Transition to planetary surface combat
+
+KEEPS COMBAT READABLE:
+- No confusing 3D space combat
+- Clear unit positioning
+- Strategic depth without complexity
+- Manages both space and ground layers
+
+INVASION SEQUENCE:
+Space Fleet → Orbital Defense Fight → Landing Zone Selection → Ground Combat
+
+================================================================================
+EMERGENT NARRATIVE LOOP (THE MAGIC)
+================================================================================
+
+The Natural Story That Emerges:
+
+Player starts weak
+↓
+Expands cautiously
+↓
+Encounters strong rival
+↓
+Long struggle (neck-and-neck)
+↓
+Player wins narrowly
+↓
+Player expands rapidly
+↓
+Galaxy responds (adaptation delay ends)
+↓
+New powerful rival emerges
+↓
+Player adapts strategy
+↓
+REPEAT FOREVER
+
+Each playthrough becomes unique story.
+Not scripted. But lived.
+
+================================================================================
+WHY THIS WORKS PSYCHOLOGICALLY
+================================================================================
+
+Continuously activates:
+✓ Uncertainty (What will happen?)
+✓ Agency (My decisions matter)
+✓ Investment (I care about outcomes)
+✓ Risk assessment (Strategic thinking)
+✓ Pattern recognition (Learning systems)
+
+Brain stays engaged because outcomes matter.
+
+================================================================================
+DEVELOPMENT PRIORITIES
+================================================================================
+
+PROTOTYPE PHASE 1: Core Equilibrium
+□ Single planet map
+□ One AI faction
+□ StrengthScore calculation system
+□ Adaptive unit production
+□ Simple combat resolution
+□ Test if equilibrium holds
+
+PROTOTYPE PHASE 2: Expansion Mechanics
+□ Multi-city planetary conquest
+□ Resource economy
+□ Production chains
+□ Territory control
+□ Victory conditions
+
+PROTOTYPE PHASE 3: Space Layer
+□ Orbital facilities
+□ Space unit production
+□ System view (2D star map)
+□ Basic space combat
+□ Planet invasion mechanics
+
+PROTOTYPE PHASE 4: Multi-Planet System
+□ Multiple planets in one system
+□ Fleet management
+□ Invasion coordination
+□ Planetary defense systems
+□ Strategic resource allocation
+
+PROTOTYPE PHASE 5: Full Galactic Scale
+□ Multiple star systems
+□ Galactic view
+□ Complex AI faction interactions
+□ Advanced equilibrium tuning
+□ Polish and atmosphere
+
+POLISH PHASE: Atmosphere & Feel
+□ Music system (context-aware)
+□ Sound design
+□ Visual feedback
+□ UI/UX refinement
+□ Performance optimization
+
+================================================================================
+QUALITY CHECKLIST (Always Maintain These)
+================================================================================
+
+✓ Is the outcome uncertain?
+✓ Do player decisions matter?
+✓ Is tension sustained without overwhelming?
+✓ Are AI factions behaving independently?
+✓ Is equilibrium being maintained?
+✓ Can player recover from setbacks?
+✓ Does progression feel meaningful?
+✓ Are emergent stories happening?
+✓ Is atmosphere amplifying emotions?
+
+================================================================================
+AVOID THESE MISTAKES
+================================================================================
+
+✗ Static difficulty levels
+✗ Scripted campaign progression
+✗ Runaway snowball effects
+✗ Predictable AI behavior
+✗ Perfect information
+✗ Instant adaptation (feels fake)
+✗ Complete safety when powerful
+✗ Impossible recovery from losses
+✗ Content quantity over system quality
+✗ 3D space combat (too confusing)
+
+================================================================================
+THE VISION
+================================================================================
+
+"A self-balancing planetary RTS with adaptive opposition that generates 
+endless emergent narratives through systemic tension, where every playthrough 
+tells a unique story of struggle, adaptation, and earned dominance."
+
+Target Experience:
+- "I barely survived that invasion"
+- "I thought I was winning, then..."
+- "That rival faction came out of nowhere"
+- "Finally conquered them after 30 minutes of war"
+- "Just when I felt powerful, the galaxy pushed back"
+
+These moments emerge naturally from systems, not scripts.
+
+================================================================================
+SUCCESS METRICS
+================================================================================
+
+The game succeeds when players:
+1. Tell unique stories about their playthrough
+2. Feel tension throughout (not just early game)
+3. Experience unexpected outcomes
+4. Feel victories are earned, not gifted
+5. Never want to stop playing (perpetual engagement)
+6. Create their own narratives organically
+
+The game fails when:
+1. Outcomes become predictable
+2. Player becomes invincible
+3. Challenges become trivial
+4. AI feels scripted or robotic
+5. Stories feel same every time
+
+================================================================================
+TECHNICAL FOUNDATION (Unreal Engine 5)
+================================================================================
+
+Key Systems to Build:
+1. Dynamic strength calculation system
+2. Adaptive AI director
+3. Procedural threat generation
+4. Multi-layered view system (Planet/System/Galaxy)
+5. Real-time equilibrium monitoring
+6. Faction behavior AI
+7. Combat simulation system
+8. Resource economy system
+9. Event generation system
+
+Focus: Well-designed systems over massive content.
+Systems are scalable. Content is expensive.
+
+================================================================================
+END OF DESIGN DOCUMENT
+================================================================================
+
+"You are drawn to games where the world pushes back.
+And victory is earned, not granted."
+
+Let's build that.

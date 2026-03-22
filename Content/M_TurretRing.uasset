@@ -1,0 +1,32 @@
+This is a placeholder - the actual material needs to be created in the Unreal Editor.
+
+MATERIAL SETUP INSTRUCTIONS:
+1. Open Unreal Editor
+2. Create a new Material named "M_TurretRing"
+3. Set Material Domain to "Surface"
+4. Set Blend Mode to "Translucent"
+5. Add the following nodes:
+
+Node Setup:
+- TextureCoordinate node
+- Subtract 0.5 from both U and V (to center at origin)
+- Calculate distance from center: sqrt(U² + V²)
+- Multiply by 2 to normalize (distance now 0 at center, 1 at edge)
+
+Ring Parameters:
+- InnerRadius = 0.85 (85% from center is hollow)
+- OuterRadius = 1.0 (full radius)
+- RingWidth = 0.15 (15% of radius)
+
+Alpha Channel (Opacity):
+- If distance < InnerRadius: Alpha = 0 (transparent)
+- If distance >= InnerRadius AND distance <= OuterRadius: Alpha = 1 (solid)
+- If distance > OuterRadius: Alpha = 0 (transparent)
+
+Base Color:
+- Use a parameter for color (default: white or team color)
+
+Emissive (optional):
+- Low emissive value to make ring slightly glow
+
+This creates a hollow ring with 50-unit approximate width when scaled properly.

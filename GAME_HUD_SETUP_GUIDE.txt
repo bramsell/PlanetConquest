@@ -1,0 +1,101 @@
+==============================================
+GAME HUD WIDGET SETUP GUIDE
+==============================================
+
+The GameHUDWidget displays your money and resource count at all times.
+It automatically hides when you select a city, and shows again when you close the city UI.
+
+STEP 1: Create the Widget Blueprint
+------------------------------------
+1. In Content Browser, right-click → User Interface → Widget Blueprint
+2. Name it: WBP_GameHUD
+3. Double-click to open the Widget Editor
+
+STEP 2: Design the HUD Layout
+------------------------------------
+Add these UI elements to the Canvas Panel:
+
+A) Money Display:
+   - Add a Text Block (drag from Palette → Common)
+   - Position: Top-left corner (Anchors: Top-Left, Position X: 20, Y: 20)
+   - Name it: MoneyText
+   - Default text: "$0"
+   - Font Size: 24
+   - Color: Yellow or White
+
+B) Resource Display:
+   - Add another Text Block
+   - Position: Below money text (Position X: 20, Y: 60)
+   - Name it: ResourceText
+   - Default text: "Resources: 0"
+   - Font Size: 20
+   - Color: Cyan or White
+
+C) (Optional) Background Panel:
+   - Add a Border or Image behind the text for readability
+   - Set opacity to 0.5-0.7 for semi-transparency
+
+STEP 3: Bind Text to C++ Properties
+------------------------------------
+For AUTOMATIC updates (recommended):
+
+1. MoneyText:
+   - Select MoneyText
+   - In Details panel, find "Text" property
+   - Click "Bind" → Create Binding
+   - In the function graph, drag from "Return Value"
+   - Search for "Format Text"
+   - Set format: "${0}" (this adds the $ symbol)
+   - For input 0: Get "Displayed Money" (from parent widget)
+   - Connect to Return Value
+
+2. ResourceText:
+   - Select ResourceText
+   - Click "Bind" → Create Binding
+   - In the function graph, use Format Text: "Resources: {0}"
+   - For input 0: Get "Displayed Resource Count"
+   - Connect to Return Value
+
+STEP 4: Set Parent Class
+------------------------------------
+1. In Widget Editor, click "File" → "Reparent Blueprint"
+2. Select "GameHUDWidget" (the C++ class we just created)
+3. Save the widget
+
+STEP 5: Assign to Player Controller
+------------------------------------
+1. Compile your C++ code if not already done
+2. In Unreal Editor, go to World Settings (Window → World Settings)
+3. Under GameMode Override section:
+   - Set Player Controller Class to: PlanetConquestPlayerController
+4. Find the PlanetConquestPlayerController in the World Outliner or:
+   - Play in Editor (PIE) once, then stop
+   - Open World Settings again
+5. In the Player Controller settings, find:
+   - Game HUD Widget Class: Set to WBP_GameHUD
+6. Save the level
+
+STEP 6: Test
+------------------------------------
+1. Play in Editor
+2. You should see "$0" and "Resources: 0" in the top-left corner
+3. Spawn a vehicle, capture a resource
+4. After 5 seconds, money should update to "$100"
+5. Resource count should update to "Resources: 1"
+6. When you click a city, the HUD should disappear
+7. When you close the city UI, the HUD should reappear
+
+TROUBLESHOOTING
+------------------------------------
+- HUD not showing: Check that Game HUD Widget Class is set in Player Controller
+- Values not updating: Make sure you bound the text to Displayed Money / Displayed Resource Count
+- Text shows "0" always: Verify the widget parent class is GameHUDWidget (not UserWidget)
+- Compile errors: Rebuild the C++ project
+
+ADVANCED CUSTOMIZATION
+------------------------------------
+- Add income rate display: Calculate (ResourceCount * 100) / 5 = income per second
+- Add icons next to numbers (coin icon, resource icon)
+- Add animations when money/resources change
+- Style with colors matching your team (cyan theme)
+- Add a semi-transparent background panel for better readability

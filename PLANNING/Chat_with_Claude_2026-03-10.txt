@@ -1,0 +1,417 @@
+ME:
+Okay while I'm working on that, I want to start thinking about the research and industry layer. Let's just brainstorm about other technologies and fields that can be explored and leveraged. Obviously the player should be able to improve their turrets and vehicles firing rate, firing range, projectile damage, health, and speed. They could also unlock buildings, although I'm not sure what those buildings would be. And I want to allow things like building research stations near volcanoes or strange organic or geological landmarks that unlock tech over time. Maybe setting up research near mountains? I'm not sure
+
+CLAUDE:
+Great time to brainstorm this. Let me think about it in terms of what makes research feel meaningful rather than just a stat upgrade treadmill.
+
+---
+
+## The Core Design Tension
+
+Pure stat upgrades (faster vehicles, more damage) are satisfying but forgettable. The most memorable research unlocks **new verbs** — things you can do that you couldn't before. The best research tree has both, but the new verbs are what make factions feel distinct and sessions feel different.
+
+---
+
+## Research Categories
+
+**Military**
+The obvious one. But beyond raw stats, interesting unlocks could include stealth vehicles that don't trigger kaiju detection radius, EMP weapons that temporarily disable enemy turrets, siege vehicles specifically effective against city buildings, and decoy units that draw kaiju aggression away from your fleet.
+
+**Economic**
+Improved mining efficiency, but also more interesting things like substrate conversion (turn excess orange into black at a ratio), automated mining drones that don't need vehicle assignment, and resource scanning that reveals hidden deposits before you send vehicles.
+
+**Diplomatic**
+Counterintelligence that reduces disposition damage when your allies trade with enemies, propaganda that slowly shifts a neutral team's disposition toward you, and spy networks that reveal enemy black substrate reserves (solving the fog-of-war problem you designed around).
+
+**Biological / Kaiju**
+This is where it gets interesting. Kaiju pheromone research lets you craft lures to direct kaiju aggression toward enemies. Kaiju sedatives let captured kaiju be studied rather than killed. Eventually kaiju domestication as a late-game military option.
+
+**Geological**
+Volcano research near volcanic landmarks unlocks geothermal energy — a passive income source not tied to mines, making you less vulnerable to mine raiding. Seismic research near fault lines could unlock tremor weapons that damage buildings in an area. Mountain research unlocks altitude advantages for turrets and eventually the launch port.
+
+**Organic / Biological Landmarks**
+Strange organic landmarks could unlock bioengineering — enhanced vehicle armor grown from organic material, biological turrets that self-repair, or spores that slow enemy vehicles passing through territory.
+
+---
+
+## Research Stations Near Landmarks
+
+This is your strongest idea and worth building the whole system around. The pattern is:
+
+```
+Discover landmark → build outpost nearby → research accumulates over time
+→ unlock landmark-specific tech → landmark becomes strategic asset worth defending
+```
+
+Each landmark type unlocks a unique branch unavailable elsewhere:
+
+```
+Volcano        → Geothermal energy, lava weapons, heat-resistant vehicles
+Mountain       → Altitude scanning, launch port prerequisite, kaiju deterrent fields  
+Strange spire  → Alien material research, exotic weapon types, signal jamming
+Kaiju nest     → Kaiju biology, pheromones, domestication path
+Ancient ruin   → Lost technology, one-time powerful unlock, disposition bonus with certain teams
+Deep crater    → Subterranean resource detection, underground tunneling vehicles
+```
+
+The ruins idea is particularly interesting — an ancient ruin could contain a one-time technology that dramatically accelerates one faction's capability, making whoever controls it a target for everyone else.
+
+---
+
+## Buildings In Cities
+
+You mentioned being unsure what city buildings would do. Here's a framework:
+
+```
+Production buildings  → Factory (faster vehicle build), Shipyard (naval units)
+Economic buildings    → Trade hub (improves trade value), Substrate refinery (conversion)
+Military buildings    → Barracks (veteran vehicle bonuses), Radar tower (expanded vision)
+Research buildings    → University (passive research accumulation), Lab (unlocks research tree access)
+Diplomatic buildings  → Embassy (disposition bonuses with specific teams), Marketplace
+Defense buildings     → Wall segments, Shield generator, Repair bay
+```
+
+The interesting constraint is **city size limits how many buildings you can have**, forcing meaningful tradeoffs. A militaristic city looks completely different from an economic one.
+
+---
+
+## The Startup Connection
+
+Your startup idea fits perfectly here as a **research accelerator** rather than a replacement. The base research system is internal — slow, steady, guaranteed. Startups are external — faster, specialized, but with strings attached.
+
+```
+Internal research:  University building → 1 point/cycle → slow but you own it fully
+Startup research:   Fund "Kaiju Cybernetics" → 5 points/cycle toward kaiju branch
+                    BUT corporation gains influence as it grows
+                    AND rival teams can poach it with better funding
+```
+
+This makes the startup system feel like a meaningful acceleration choice rather than just a parallel tech tree. You're trading control for speed.
+
+---
+
+## What To Build First
+
+If I were sequencing this I'd suggest:
+
+The landmark outpost system first, because it creates strategic locations worth fighting over immediately, even before the full tech tree exists. Just having "build outpost near volcano → unlocks geothermal income" gives players a reason to explore and contest territory beyond mine clusters.
+
+Then city buildings, because they create visible differentiation between cities and give the player meaningful construction decisions.
+
+Then the full tech tree, once you know from playtesting which landmark branches feel most interesting.
+
+Startups last, once the research foundation exists to accelerate.
+
+What kind of landmark density were you imagining — a handful of special sites per map, or more scattered throughout?
+
+
+ME:
+Okay let's think about this... I have the kaiju added, but they protect clusters, there's no "nests" yet. Also if teams can place research stations, that means the player needs a contol to hover over an area and then build a research station. I could simply allow the player to build one anywhere, but that means I need a specific mouse command or hotkey for vehicles to move to an area, then set up a station, just like building a mine at a resource but that location is discrete. On the other hand, we can have many areas where the cursor changes, and a hover UI appears showing it's a spot of interest. That might be more clear to the player, and it solves the mouse control issue. So then the problem becomes what these areas of interest would be. I was thinking if the player could place a station anywhere, they could try and build one near a large kaiju, but maybe we can add a "nest" in that area as well, which happens to be near resource clusters. That actually makes more sense. Then there could be other things to research. Actually it seems like some things like firing power, range and speed could largely be discovered through the team building universities in the city, and investing in industries that prioritize that research. I think that makes more sense that searching out that tech in the wild, especially since all teams already have that tech to some degree.
+
+
+CLAUDE:
+You're converging on a really clean distinction here:
+
+**City-based research** — incremental improvements to things you already have. Faster vehicles, better weapons, stronger turrets. This is the university/industry layer. Every team has access to the same tree, just at different rates depending on investment. No exploration required.
+
+**Field research stations** — unique unlocks tied to specific locations. Things no one has yet, that can't be researched in a lab because you need to be *there* to study them. This is what makes exploration meaningful and creates asymmetric faction capabilities.
+
+That separation is elegant because it answers your control problem too — field stations only get built at designated points of interest, so the UI is just "build here" when your cursor is on a hotspot, exactly like building a mine at a resource node. No freeform placement needed.
+
+---
+
+## Points Of Interest Categories
+
+```
+Kaiju Nest      → kaiju biology, pheromones, domestication path
+                  Risk: large kaiju nearby, other teams will contest it
+
+Volcano         → geothermal energy, heat weapons, heat-resistant armor
+                  Risk: periodic eruption events damage the station
+
+Ancient Ruin    → one-time powerful unlock, lost technology
+                  Risk: draws attention, everyone wants it
+
+Strange Spire   → signal research, jamming, long-range scanning
+                  Risk: alien, unpredictable side effects
+
+Deep Crater     → subterranean deposits, tunneling tech
+                  Risk: seismic instability
+
+Orbital Anomaly → near mountain peaks, prerequisite for launch port
+                  Risk: exposed position, hard to defend
+```
+
+Each site has a **risk profile** that makes defending it an ongoing decision rather than a one-time build. The kaiju nest is the most interesting because the risk is dynamic — the kaiju doesn't just threaten your station, it threatens any team that comes to contest control of the site.
+
+---
+
+## The Nest As A Research Site
+
+Having the nest co-located with a resource cluster is smart design for several reasons. It means the cluster is highly valuable but naturally defended, so it's a late-game target rather than something teams rush immediately. It also means once you *do* establish a station there, you get both the research and the resources — a significant reward for the effort.
+
+The research unlocks from a nest could tier naturally with how long your station has been active:
+
+```
+Tier 1 (station established):    Kaiju behavior visibility — see aggression/invasion urge
+Tier 2 (30 cycles):              Pheromone lures — redirect kaiju toward enemy territory  
+Tier 3 (75 cycles):              Sedative tech — capture rather than kill
+Tier 4 (150 cycles):             Domestication — kaiju becomes a controllable unit
+```
+
+Each tier requires the station to survive, which means defending it against both kaiju and rival teams who want to destroy your research advantage. That's a compelling long-term strategic commitment.
+
+---
+
+## City Research Feeling Different
+
+The city/field split also solves a tone problem. City research feels like civilization advancing — you're building institutions, investing in industries, improving what you have. Field research feels like discovery — you're sending scouts into dangerous territory and learning things no one knew before.
+
+Those are two genuinely different gameplay experiences and they complement each other well. A team that never explores has better baseline stats but no unique capabilities. A team that explores aggressively has exotic tech but might have neglected their fundamentals. That tradeoff creates interesting faction diversity without scripting it.
+
+For the university/industry layer specifically, the simplest implementation is probably a passive accumulation system — each city building contributes research points per cycle toward a shared pool, and thresholds unlock the next stat tier. No active decisions needed beyond which buildings to construct, which you're already deciding.
+
+How many points of interest were you thinking per map — a handful of high-value sites everyone competes over, or enough that each team could realistically claim one or two without major conflict?
+
+
+ME:
+I'm thinking research stations show be easy to make and there's plent of opportunities, the real investment would be the cost to fund the research. Like maybe it's a big investment either way, but letting companies run the research means more certain progress, at the expense of control later. But should the research be funded with substrate? Or do we need to add a currency and some method of exchanging substrate for currency. That gets complicated but could be better for a nation that could have money but no substrate to just buy things from others, but the risk is no one trades with them. On the other hand I want to keep things as intuitive as possible while still interesting.
+
+I want to keep the feel less technical, so if a player puts universities in their city, I din't want it to be obvious what progress is being made. Maybe it has some randomness to it, like every 10 minutes there's an x% chance to discover some upgrade, and more universities increase the odds.
+
+
+CLAUDE:
+The currency question is worth settling first because it affects everything else.
+
+---
+
+## Keep Substrate As Currency
+
+Adding a separate currency creates a whole exchange rate system and abstraction layer that pulls focus from the core gameplay. Substrate already *is* your currency — orange builds things, black fuels military. The question is just which substrate funds research.
+
+The most intuitive answer is **orange funds research** because orange is already the "civilization" resource. Black is military/fuel. Research feeling like an orange investment fits the existing mental model without explanation.
+
+The one thing you'd lose with no currency is the "nation with money but no substrate" scenario you mentioned. But honestly that's an edge case that adds complexity for a rarely interesting situation. If a team has no orange they have bigger problems than funding research.
+
+---
+
+## The Randomness Feel
+
+Your instinct here is really good. Research that feels like discovery rather than a progress bar is much more appropriate to the game's tone. The difference between:
+
+```
+"University research: 847/1000 points → Vehicle Speed Tier 2"
+```
+vs
+```
+"Your researchers made a breakthrough — vehicles can now be fitted 
+ with improved drive systems"
+```
+
+The second feels like something happened in your civilization. The first feels like a loading bar.
+
+The probabilistic model fits this perfectly:
+
+```cpp
+// Each research cycle (every 10 minutes game time)
+void TickCityResearch(ACityActor* City)
+{
+    int32 UniversityCount = City->GetBuildingCount(EBuildingType::University);
+    
+    // Base discovery chance + university bonus
+    float DiscoveryChance = 0.05f + (UniversityCount * 0.08f);
+    
+    // Company funding accelerates odds significantly
+    if (City->HasFundedCompany(ECompanyType::Research))
+        DiscoveryChance *= 2.5f;
+    
+    if (FMath::FRand() < DiscoveryChance)
+    {
+        FResearchDiscovery Discovery = PickWeightedDiscovery(City);
+        ApplyDiscovery(City, Discovery);
+        NotifyPlayer(Discovery);
+    }
+}
+```
+
+The player knows more universities means better odds, but not exactly when something will arrive. That uncertainty makes discoveries feel like events rather than purchases.
+
+---
+
+## Weighted Discovery Pool
+
+Rather than a linear tree, discoveries come from a weighted pool that shifts based on what you've already found and what's relevant to your situation:
+
+```cpp
+FResearchDiscovery PickWeightedDiscovery(ACityActor* City)
+{
+    // Weight increases if relevant to current situation
+    // e.g. if under frequent attack, military discoveries weighted higher
+    // if income struggling, economic discoveries weighted higher
+    // if near a kaiju nest, biological discoveries appear in pool
+    
+    TArray<FResearchDiscovery> Pool = BuildDiscoveryPool(City);
+    // Filter out already-discovered items
+    // Weight by situational relevance
+    // Pick randomly from weighted pool
+}
+```
+
+This means two players with identical universities will discover different things based on what's happening in their game. A team that's been fighting a lot might stumble onto weapon improvements. A peaceful trading team might discover economic efficiencies. Research reflects your playstyle without being prescriptive.
+
+---
+
+## Company Funding Model
+
+Keep it simple — funding a company is a one-time orange investment that persists:
+
+```
+Fund company:     500 orange upfront
+Effect:           2.5x discovery chance for that research category
+                  Discoveries in that category arrive faster AND
+                  are more likely to be higher tier
+Tradeoff:         Company gains influence each time it delivers a discovery
+                  At high influence, company may share discoveries with others
+                  or demand additional funding to continue
+```
+
+The player never knows exactly what the company will discover next, just that they're specializing in a domain. This keeps the randomness feel while making the investment meaningful.
+
+---
+
+## What The Player Actually Sees
+
+Minimal UI, maximum flavor:
+
+```
+City view shows:  Number of universities (simple count)
+                  Whether a research company is funded (yes/no + domain)
+                  Recent discoveries log (last 3 discoveries, with timestamps)
+
+No progress bars. No percentages. No tech trees visible upfront.
+
+Discoveries arrive as notification events:
+"Kaiju Cybernetics has made a breakthrough in sedative compounds"
+"Your university researchers improved vehicle hull plating"
+"A researcher near the volcanic outpost developed heat-resistant alloys"
+```
+
+The player learns what's possible by discovering it, which makes the tech space feel larger and more mysterious than a visible tree would.
+
+Does this feel like the right balance, or do you want slightly more player control over what gets researched — like choosing a focus area without seeing exact progress?
+
+
+ME:
+Okay let's think about the buildings. We could have universities, that automatically discover tech for the state, but maybe require funding, then we could have office buildings or labs, which could be donated to companies to start their research. Or maybe the buildings would just be labs, and we can choose to either nationalize them or privatize them, just like the research stations that would be out in the wild.
+
+
+CLAUDE:
+That's a really elegant simplification. One building type, two modes of operation. It maps perfectly onto the nationalize/privatize tension you designed for the corporation system.
+
+---
+
+## The Lab As The Core Building
+
+```
+Lab (nationalized):   Slow, steady, guaranteed discoveries
+                      You own the IP fully
+                      No external dependencies
+                      Discovery rate: base chance per cycle
+
+Lab (privatized):     Faster discoveries in chosen domain
+                      Company gains influence over time
+                      Company may share discoveries with rivals
+                      Discovery rate: 2-3x base, but focused
+```
+
+The player decision is never "which building do I build" but always "who controls this lab." That's a more interesting and more legible choice.
+
+---
+
+## How Privatization Works
+
+When you privatize a lab you're essentially inviting a company in:
+
+```
+Player action:    Privatize lab → choose from available companies
+                  (companies that exist are influenced by what's happened in your game —
+                  kaiju encounters spawn kaiju-related companies,
+                  volcanic research spawns materials companies, etc.)
+
+Company moves in: Lab now generates discoveries faster in company's domain
+                  Company influence starts at 0, grows each discovery cycle
+                  
+Influence tiers:
+  0-30:   Company is cooperative, does what you ask
+  30-60:  Company has preferences, occasionally declines requests
+  60-85:  Company shares some discoveries with highest bidder
+  85+:    Company is effectively independent, you're just their landlord
+```
+
+At high influence you can't simply kick them out either — that costs significant disposition with other companies watching, and the company might relocate to a rival city taking their accumulated research with them.
+
+---
+
+## Nationalizing vs Privatizing As A Spectrum
+
+Rather than a binary switch, it could exist on a spectrum:
+
+```
+Fully nationalized → Majority state → Public-private → Majority private → Fully privatized
+```
+
+Each step trades control for speed. A player who needs a quick military breakthrough might push a lab toward fully privatized knowing they'll lose control eventually. A player playing long game keeps labs nationalized and accepts slower progress.
+
+You could even allow partial privatization — the company gets 60% of discoveries, you get 40%, influence grows slower. A compromise position with compromise outcomes.
+
+---
+
+## Field Stations Using The Same Model
+
+The nationalize/privatize decision applies identically to field research stations, which is elegant:
+
+```
+Nationalized station:   Your researchers study the landmark
+                        Slow but you own every discovery
+                        
+Privatized station:     Company sends their researchers
+                        Much faster, domain-specific
+                        Company gains influence AND physical presence
+                        outside your city — harder to reclaim
+```
+
+The field station being privatized to a company that's already high-influence in your city creates an interesting situation — the company now has presence in two locations, which could be a mechanic for accelerating their path to full independence.
+
+---
+
+## What Other Teams See
+
+AI teams should make the same nationalize/privatize decisions based on personality:
+
+```
+Expansionist AI:    Privatizes aggressively, accepts influence loss for speed
+Isolationist AI:    Nationalizes everything, slower but never loses control
+Mercantile AI:      Privatizes strategically, manages influence carefully
+Opportunist AI:     Privatizes then lets companies go rogue, 
+                    then tries to poach rival companies
+```
+
+The opportunist behavior is particularly interesting — deliberately letting a company gain independence then offering them better terms than their current host. Corporate espionage as a diplomatic tool.
+
+---
+
+## The Minimal Building Set
+
+With labs as the core, the city building list becomes quite focused:
+
+```
+Lab              → research, nationalized or privatized
+Factory          → faster vehicle production
+Turret platform  → enables turret placement in territory
+Trade depot      → improves trade value, required for trading
+Recruitment hall → increases vehicle cap or reduces build cost
+```
+
+Five building types, each with a clear purpose, no overlap. The lab is the most complex because of the nationalize/privatize axis. The others are straightforward investments.
+
+Does the single lab building with two modes feel right, or do you want a distinction between a basic university-style building and a more advanced lab — like the university does slow broad research and the lab enables privatization?

@@ -1,0 +1,29 @@
+# Visual Studio
+.vs/
+*.VC.db
+*.sdf
+*.suo
+*.user
+
+# Unreal Engine - Build Artifacts
+Binaries/
+Build/
+Intermediate/
+DerivedDataCache/
+
+# Unreal Engine - Generated/Saved Files
+Saved/
+*.sln
+*.xcodeproj
+*.xcworkspace
+
+# Backup Files
+Backup/
+
+# Python Cache (scripts will be included)
+__pycache__/
+*.pyc
+
+# OS Files
+.DS_Store
+Thumbs.db

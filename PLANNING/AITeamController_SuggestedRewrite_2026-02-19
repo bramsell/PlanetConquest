@@ -1,0 +1,1691 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#include "AITeamController.h"
+#include "../Entities/Vehicles/VehicleActor.h"
+#include "../Entities/Cities/CityActor.h"
+#include "../Entities/Resources/ResourceActor.h"
+#include "../Entities/Buildings/BuildingActor.h"
+#include "../Entities/Buildings/FactoryBuildingActor.h"
+#include "../Entities/Buildings/TurretBuildingActor.h"
+#include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
+
+AAITeamController::AAITeamController()
+{
+    PrimaryActorTick.bCanEverTick = true;
+
+    // Initialize default personality (balanced)
+    Personality.Aggression = 0.5f;
+    Personality.Greed = 0.5f;
+    Personality.Caution = 0.5f;
+    Personality.Patience = 0.5f;
+
+    // Initialize action configurations (min/max vehicles for vehicle-based actions)
+    FActionConfig ResourceCapture;
+    ResourceCapture.MinVehicles = 1;
+    ResourceCapture.MaxVehicles = 4;
+    ResourceCapture.bIsVehicleAction = true;
+    ActionConfigs.Add(EAIAction::CaptureResources, ResourceCapture);
+
+    FActionConfig EnemyResourceCapture;
+    EnemyResourceCapture.MinVehicles = 1;
+    EnemyResourceCapture.MaxVehicles = 5;
+    EnemyResourceCapture.bIsVehicleAction = true;
+    ActionConfigs.Add(EAIAction::CaptureEnemyResources, EnemyResourceCapture);
+
+    FActionConfig CityCapture;
+    CityCapture.MinVehicles = 3;
+    CityCapture.MaxVehicles = 15;
+    CityCapture.bIsVehicleAction = true;
+    ActionConfigs.Add(EAIAction::CaptureCities, CityCapture);
+
+    FActionConfig AttackVehicles;
+    AttackVehicles.MinVehicles = 2;
+    AttackVehicles.MaxVehicles = 8;
+    AttackVehicles.bIsVehicleAction = true;
+    ActionConfigs.Add(EAIAction::AttackVehicles, AttackVehicles);
+
+    FActionConfig Defense;
+    Defense.MinVehicles = 1;
+    Defense.MaxVehicles = 10;
+    Defense.bIsVehicleAction = true;
+    ActionConfigs.Add(EAIAction::DefendCities, Defense);
+
+    FActionConfig BuildVehicles;
+    BuildVehicles.Cost = 1000;
+    BuildVehicles.bIsVehicleAction = false;
+    ActionConfigs.Add(EAIAction::BuildVehicles, BuildVehicles);
+
+    FActionConfig BuildTurrets;
+    BuildTurrets.Cost = 2000;
+    BuildTurrets.bIsVehicleAction = false;
+    ActionConfigs.Add(EAIAction::BuildTurrets, BuildTurrets);
+
+    FActionConfig BuildFactories;
+    BuildFactories.Cost = 3000;
+    BuildFactories.bIsVehicleAction = false;
+    ActionConfigs.Add(EAIAction::BuildFactories, BuildFactories);
+
+    // Initialize contribution matrix (how much each action helps each goal)
+    InitializeContributionMatrix();
+}
+
+void AAITeamController::InitializeContributionMatrix()
+{
+    // CONQUER ENEMY - offensive expansion
+    ContributionMatrix.Add({EAIAction::CaptureCities, EStrategicGoal::ConquerEnemy}, 1.0f);
+    ContributionMatrix.Add({EAIAction::BuildVehicles, EStrategicGoal::ConquerEnemy}, 0.6f);
+    ContributionMatrix.Add({EAIAction::AttackVehicles, EStrategicGoal::ConquerEnemy}, 0.4f);
+    ContributionMatrix.Add({EAIAction::CaptureEnemyResources, EStrategicGoal::ConquerEnemy}, 0.5f);
+    ContributionMatrix.Add({EAIAction::CaptureResources, EStrategicGoal::ConquerEnemy}, 0.2f);
+    ContributionMatrix.Add({EAIAction::BuildFactories, EStrategicGoal::ConquerEnemy}, 0.1f);
+    ContributionMatrix.Add({EAIAction::DefendCities, EStrategicGoal::ConquerEnemy}, -0.2f);
+    ContributionMatrix.Add({EAIAction::BuildTurrets, EStrategicGoal::ConquerEnemy}, -0.3f);
+
+    // DEFEND TERRITORY - protect what we have
+    ContributionMatrix.Add({EAIAction::DefendCities, EStrategicGoal::DefendTerritory}, 1.0f);
+    ContributionMatrix.Add({EAIAction::BuildTurrets, EStrategicGoal::DefendTerritory}, 0.8f);
+    ContributionMatrix.Add({EAIAction::BuildVehicles, EStrategicGoal::DefendTerritory}, 0.5f);
+    ContributionMatrix.Add({EAIAction::AttackVehicles, EStrategicGoal::DefendTerritory}, 0.4f);
+    ContributionMatrix.Add({EAIAction::CaptureResources, EStrategicGoal::DefendTerritory}, 0.0f);
+    ContributionMatrix.Add({EAIAction::BuildFactories, EStrategicGoal::DefendTerritory}, -0.1f);
+    ContributionMatrix.Add({EAIAction::CaptureEnemyResources, EStrategicGoal::DefendTerritory}, -0.2f);
+    ContributionMatrix.Add({EAIAction::CaptureCities, EStrategicGoal::DefendTerritory}, -0.4f);
+
+    // ECONOMIC GROWTH - build wealth and income
+    ContributionMatrix.Add({EAIAction::CaptureResources, EStrategicGoal::EconomicGrowth}, 1.0f);
+    ContributionMatrix.Add({EAIAction::BuildFactories, EStrategicGoal::EconomicGrowth}, 0.9f);
+    ContributionMatrix.Add({EAIAction::CaptureEnemyResources, EStrategicGoal::EconomicGrowth}, 0.6f);
+    ContributionMatrix.Add({EAIAction::CaptureCities, EStrategicGoal::EconomicGrowth}, 0.4f);
+    ContributionMatrix.Add({EAIAction::DefendCities, EStrategicGoal::EconomicGrowth}, 0.1f);
+    ContributionMatrix.Add({EAIAction::AttackVehicles, EStrategicGoal::EconomicGrowth}, 0.0f);
+    ContributionMatrix.Add({EAIAction::BuildVehicles, EStrategicGoal::EconomicGrowth}, -0.2f);
+    ContributionMatrix.Add({EAIAction::BuildTurrets, EStrategicGoal::EconomicGrowth}, -0.3f);
+
+    // MILITARY BUILDUP - accumulate force for future
+    ContributionMatrix.Add({EAIAction::BuildVehicles, EStrategicGoal::MilitaryBuildup}, 1.0f);
+    ContributionMatrix.Add({EAIAction::CaptureResources, EStrategicGoal::MilitaryBuildup}, 0.5f);
+    ContributionMatrix.Add({EAIAction::BuildFactories, EStrategicGoal::MilitaryBuildup}, 0.4f);
+    ContributionMatrix.Add({EAIAction::CaptureEnemyResources, EStrategicGoal::MilitaryBuildup}, 0.3f);
+    ContributionMatrix.Add({EAIAction::DefendCities, EStrategicGoal::MilitaryBuildup}, 0.1f);
+    ContributionMatrix.Add({EAIAction::AttackVehicles, EStrategicGoal::MilitaryBuildup}, -0.1f);
+    ContributionMatrix.Add({EAIAction::CaptureCities, EStrategicGoal::MilitaryBuildup}, -0.3f);
+    ContributionMatrix.Add({EAIAction::BuildTurrets, EStrategicGoal::MilitaryBuildup}, -0.2f);
+}
+
+void AAITeamController::BeginPlay()
+{
+    Super::BeginPlay();
+    
+    // Auto-find primary city if not set
+    if (!PrimaryCity)
+    {
+        TArray<ACityActor*> TeamCities = GetTeamCities();
+        if (TeamCities.Num() > 0)
+        {
+            PrimaryCity = TeamCities[0];
+        }
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("AI Team %d Personality - Aggression: %.2f, Greed: %.2f, Caution: %.2f, Patience: %.2f"), 
+        (int32)ControlledTeam, Personality.Aggression, Personality.Greed, Personality.Caution, Personality.Patience);
+}
+
+void AAITeamController::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+
+    CurrentWorldTime += DeltaTime;
+    TimeSinceLastUpdate += DeltaTime;
+
+    if (TimeSinceLastUpdate >= AIUpdateInterval)
+    {
+        TimeSinceLastUpdate = 0.0f;
+        UpdateAI();
+    }
+}
+
+void AAITeamController::UpdateAI()
+{
+    // Phase 1: Gather information
+    GatherPressures();
+    DetectAndRecoverStuckVehicles();
+    
+    // Phase 2: Goal-oriented decision making
+    CalculateGoalWeights();
+    ScoreAllActions();
+    
+    // Phase 3: Resource allocation and execution
+    AllocateResourcesToActions();
+    ExecuteActions();
+    
+    // Debug logging
+    if (bEnableDebugLogging && ControlledTeam == EOwnerTeam::AI1)
+    {
+        LogAIState();
+    }
+}
+
+//=============================================================================
+// PHASE 1: INFORMATION GATHERING
+//=============================================================================
+
+void AAITeamController::GatherPressures()
+{
+    // Reset pressures
+    Pressures = FAIPressures();
+
+    // Get team entities
+    TArray<AVehicleActor*> TeamVehicles = GetTeamVehicles();
+    TArray<ACityActor*> TeamCities = GetTeamCities();
+    TArray<AResourceActor*> TeamResources = GetTeamResources();
+
+    // Basic counts
+    Pressures.VehiclesOwned = TeamVehicles.Num();
+    Pressures.CitiesOwned = TeamCities.Num();
+    Pressures.OwnedResources = TeamResources.Num();
+    Pressures.Money = Money;
+
+    // Calculate income rate (resources + cities + factories) × $100 per 5 sec = $1200/min each
+    int32 TotalFactories = 0;
+    for (ACityActor* City : TeamCities)
+    {
+        if (City) TotalFactories += City->GetFactoryCount();
+    }
+    Pressures.IncomePerMinute = (Pressures.OwnedResources + Pressures.CitiesOwned + TotalFactories) * 1200;
+
+    // Get all enemy cities for proximity comparisons
+    TArray<AActor*> AllCitiesActors;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCitiesActors);
+    TArray<ACityActor*> EnemyCities;
+    for (AActor* Actor : AllCitiesActors)
+    {
+        ACityActor* City = Cast<ACityActor>(Actor);
+        if (City && City->OwnerTeam != ControlledTeam && City->OwnerTeam != EOwnerTeam::Neutral)
+        {
+            EnemyCities.Add(City);
+        }
+    }
+
+    // Classify resources as proximal (safe) or non-proximal (aggressive)
+    TArray<AActor*> AllResources;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResources);
+
+    for (AActor* Actor : AllResources)
+    {
+        AResourceActor* Resource = Cast<AResourceActor>(Actor);
+        if (!Resource || Resource->OwnerTeam == ControlledTeam)
+        {
+            continue;
+        }
+
+        FVector ResourceLocation = Resource->GetActorLocation();
+
+        // Find distance to nearest AI city
+        float NearestAICityDistance = FLT_MAX;
+        for (ACityActor* City : TeamCities)
+        {
+            if (!City) continue;
+            float Distance = FVector::Dist(City->GetActorLocation(), ResourceLocation);
+            NearestAICityDistance = FMath::Min(NearestAICityDistance, Distance);
+        }
+
+        // Find distance to nearest enemy city
+        float NearestEnemyCityDistance = FLT_MAX;
+        for (ACityActor* EnemyCity : EnemyCities)
+        {
+            float Distance = FVector::Dist(EnemyCity->GetActorLocation(), ResourceLocation);
+            NearestEnemyCityDistance = FMath::Min(NearestEnemyCityDistance, Distance);
+        }
+
+        // Classify
+        if (Resource->OwnerTeam == EOwnerTeam::Neutral)
+        {
+            if (NearestAICityDistance < NearestEnemyCityDistance)
+            {
+                Pressures.ProximalNeutralResources++;
+            }
+            else
+            {
+                Pressures.NonProximalNeutralResources++;
+            }
+        }
+        else
+        {
+            // Enemy-owned resource
+            Pressures.EnemyResources++;
+        }
+    }
+
+    // Count proximal enemy cities (within detection range)
+    Pressures.ProximalEnemyCities = 0;
+    if (TeamCities.Num() > 0)
+    {
+        for (ACityActor* EnemyCity : EnemyCities)
+        {
+            for (ACityActor* OurCity : TeamCities)
+            {
+                float Distance = FVector::Dist(OurCity->GetActorLocation(), EnemyCity->GetActorLocation());
+                if (Distance <= ProximityDetectionRange)
+                {
+                    Pressures.ProximalEnemyCities++;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Count proximal enemy vehicles (within 4× turret radius of any city)
+    TArray<AActor*> AllVehicles;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+
+    TSet<AVehicleActor*> CountedVehicles;
+    for (ACityActor* City : TeamCities)
+    {
+        if (!City) continue;
+
+        float ThreatRadius = City->CalculateTurretRadius() * 4.0f;
+        FVector CityLocation = City->GetActorLocation();
+
+        for (AActor* Actor : AllVehicles)
+        {
+            AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
+            if (Vehicle && Vehicle->OwnerTeam != ControlledTeam && !CountedVehicles.Contains(Vehicle))
+            {
+                float Distance = FVector::Dist(CityLocation, Vehicle->GetActorLocation());
+                if (Distance <= ThreatRadius)
+                {
+                    Pressures.ProximalEnemyVehicles++;
+                    CountedVehicles.Add(Vehicle);
+                }
+            }
+        }
+    }
+
+    // Track city health for threat detection
+    Pressures.CitiesUnderAttack = 0;
+    Pressures.TotalThreatLevel = 0.0f;
+    Pressures.LowestCityHealthPercent = 1.0f;
+
+    for (ACityActor* City : TeamCities)
+    {
+        if (!City) continue;
+
+        float HealthPercent = City->CurrentHealth / City->MaxHealth;
+        Pressures.LowestCityHealthPercent = FMath::Min(Pressures.LowestCityHealthPercent, HealthPercent);
+
+        // Get or create defense tracking
+        if (!CityDefenseTracking.Contains(City))
+        {
+            CityDefenseTracking.Add(City, FCityDefenseData());
+        }
+        FCityDefenseData& DefenseData = CityDefenseTracking[City];
+
+        // Calculate total health (city + buildings)
+        float TotalHealth = City->CurrentHealth;
+        for (ABuildingActor* Building : City->Buildings)
+        {
+            if (Building) TotalHealth += Building->CurrentHealth;
+        }
+
+        // Record health sample
+        FCityHealthSample Sample;
+        Sample.TotalHealth = TotalHealth;
+        Sample.Timestamp = CurrentWorldTime;
+        DefenseData.RecentHealthSamples.Add(Sample);
+
+        // Remove old samples (>15 seconds)
+        DefenseData.RecentHealthSamples.RemoveAll([this](const FCityHealthSample& S)
+        {
+            return (CurrentWorldTime - S.Timestamp) > 15.0f;
+        });
+
+        // Calculate threat level (damage over time window)
+        DefenseData.ThreatLevel = 0.0f;
+        if (DefenseData.RecentHealthSamples.Num() >= 2)
+        {
+            float OldestHealth = DefenseData.RecentHealthSamples[0].TotalHealth;
+            float TimeSpan = CurrentWorldTime - DefenseData.RecentHealthSamples[0].Timestamp;
+
+            if (TimeSpan >= 5.0f)
+            {
+                float HealthLoss = FMath::Max(0.0f, OldestHealth - TotalHealth);
+                DefenseData.ThreatLevel = HealthLoss;
+            }
+        }
+
+        if (DefenseData.ThreatLevel >= 20.0f)
+        {
+            Pressures.CitiesUnderAttack++;
+        }
+        Pressures.TotalThreatLevel += DefenseData.ThreatLevel;
+    }
+
+    // Find best attack target for strategic planning
+    CachedBestTarget = FindBestAttackTarget();
+}
+
+void AAITeamController::DetectAndRecoverStuckVehicles()
+{
+    TArray<AVehicleActor*> TeamVehicles = GetTeamVehicles();
+    TArray<ACityActor*> TeamCities = GetTeamCities();
+    
+    if (TeamCities.Num() == 0) return;
+    
+    for (AVehicleActor* Vehicle : TeamVehicles)
+    {
+        if (!Vehicle || !Vehicle->bHasAssignment) continue;
+        
+        // Skip vehicles actively doing something
+        if (Vehicle->TargetResource != nullptr) continue;
+        if (Vehicle->CurrentTarget != nullptr && IsValid(Vehicle->CurrentTarget)) continue;
+        
+        FVector CurrentPos = Vehicle->GetActorLocation();
+        
+        if (PreviousVehiclePositions.Contains(Vehicle))
+        {
+            FVector PreviousPos = PreviousVehiclePositions[Vehicle];
+            float DistanceMoved = FVector::Dist(CurrentPos, PreviousPos);
+            
+            if (DistanceMoved < 50.0f)
+            {
+                // Vehicle is stuck - reset it
+                ACityActor* NearestCity = TeamCities[0];
+                float NearestDistance = FVector::Dist(CurrentPos, NearestCity->GetActorLocation());
+                
+                for (ACityActor* City : TeamCities)
+                {
+                    float Distance = FVector::Dist(CurrentPos, City->GetActorLocation());
+                    if (Distance < NearestDistance)
+                    {
+                        NearestDistance = Distance;
+                        NearestCity = City;
+                    }
+                }
+                
+                // Send to opposite side of city
+                FVector CityLocation = NearestCity->GetActorLocation();
+                FVector ToCity = (CityLocation - CurrentPos).GetSafeNormal();
+                FVector RebootPos = CityLocation + ToCity * NearestDistance;
+                
+                Vehicle->bHasAssignment = false;
+                Vehicle->CurrentTarget = nullptr;
+                Vehicle->TargetResource = nullptr;
+                Vehicle->SetTargetLocation(RebootPos);
+                
+                AssignedVehicles.Remove(Vehicle);
+            }
+        }
+        
+        PreviousVehiclePositions.Add(Vehicle, CurrentPos);
+    }
+}
+
+//=============================================================================
+// PHASE 2: GOAL-ORIENTED DECISION MAKING
+//=============================================================================
+
+void AAITeamController::CalculateGoalWeights()
+{
+    GoalWeights.Empty();
+
+    // === DEFEND TERRITORY ===
+    float DefendWeight = 0.1f;  // Baseline
+    
+    // Active threats dramatically increase defense priority
+    if (Pressures.CitiesUnderAttack > 0)
+    {
+        DefendWeight += 0.4f + (Pressures.CitiesUnderAttack * 0.2f);
+    }
+    
+    // Proximal enemy vehicles are a threat
+    DefendWeight += FMath::Min(0.3f, Pressures.ProximalEnemyVehicles * 0.05f);
+    
+    // Low city health increases urgency
+    if (Pressures.LowestCityHealthPercent < 0.7f)
+    {
+        DefendWeight += (1.0f - Pressures.LowestCityHealthPercent) * 0.4f;
+    }
+    
+    // Caution personality modifier
+    DefendWeight *= (0.6f + Personality.Caution * 0.8f);
+    
+    GoalWeights.Add(EStrategicGoal::DefendTerritory, DefendWeight);
+
+    // === CONQUER ENEMY ===
+    float ConquerWeight = 0.1f;  // Baseline
+    
+    if (CachedBestTarget.City)
+    {
+        // Confidence ratio determines how ready we are to attack
+        if (CachedBestTarget.ConfidenceRatio >= 1.5f)
+        {
+            ConquerWeight += 0.5f;  // Very ready - high priority
+        }
+        else if (CachedBestTarget.ConfidenceRatio >= 1.0f)
+        {
+            ConquerWeight += 0.3f * CachedBestTarget.ConfidenceRatio;
+        }
+        else
+        {
+            // Not ready yet - low priority for actual attack
+            ConquerWeight += 0.1f;
+        }
+        
+        // Nearby enemy cities increase opportunity
+        ConquerWeight += FMath::Min(0.2f, Pressures.ProximalEnemyCities * 0.1f);
+    }
+    
+    // Aggression and inverse patience modifiers
+    ConquerWeight *= (0.4f + Personality.Aggression * 1.0f);
+    ConquerWeight *= (0.7f + (1.0f - Personality.Patience) * 0.6f);  // Impatient = attack sooner
+    
+    GoalWeights.Add(EStrategicGoal::ConquerEnemy, ConquerWeight);
+
+    // === ECONOMIC GROWTH ===
+    float EconomyWeight = 0.2f;  // Baseline (economy is always somewhat important)
+    
+    // Uncaptured proximal resources increase priority
+    EconomyWeight += FMath::Min(0.4f, Pressures.ProximalNeutralResources * 0.1f);
+    
+    // Low money increases need for income
+    if (Money < 3000)
+    {
+        EconomyWeight += (1.0f - (Money / 3000.0f)) * 0.3f;
+    }
+    
+    // Low income rate increases need
+    if (Pressures.IncomePerMinute < 3600)  // Less than 3 income sources
+    {
+        EconomyWeight += 0.2f;
+    }
+    
+    // Greed personality modifier
+    EconomyWeight *= (0.5f + Personality.Greed * 1.0f);
+    
+    GoalWeights.Add(EStrategicGoal::EconomicGrowth, EconomyWeight);
+
+    // === MILITARY BUILDUP ===
+    float BuildupWeight = 0.1f;  // Baseline
+    
+    // If we want to attack but can't, buildup becomes critical
+    if (CachedBestTarget.City && CachedBestTarget.ConfidenceRatio < 1.0f)
+    {
+        float Gap = 1.0f - CachedBestTarget.ConfidenceRatio;
+        BuildupWeight += Gap * 0.6f;
+    }
+    
+    // Low vehicle count increases need
+    if (Pressures.VehiclesOwned < 5)
+    {
+        BuildupWeight += 0.3f;
+    }
+    else if (Pressures.VehiclesOwned < 10)
+    {
+        BuildupWeight += 0.15f;
+    }
+    
+    // Aggression and patience modifiers (aggressive + patient = wants big army)
+    BuildupWeight *= (0.5f + Personality.Aggression * 0.5f);
+    BuildupWeight *= (0.7f + Personality.Patience * 0.6f);
+    
+    GoalWeights.Add(EStrategicGoal::MilitaryBuildup, BuildupWeight);
+
+    // Normalize weights to sum to 1.0
+    float TotalWeight = 0.0f;
+    for (auto& Pair : GoalWeights)
+    {
+        TotalWeight += Pair.Value;
+    }
+    if (TotalWeight > 0.0f)
+    {
+        for (auto& Pair : GoalWeights)
+        {
+            Pair.Value /= TotalWeight;
+        }
+    }
+}
+
+float AAITeamController::GetContribution(EAIAction Action, EStrategicGoal Goal)
+{
+    TPair<EAIAction, EStrategicGoal> Key = {Action, Goal};
+    
+    float BaseContribution = 0.0f;
+    if (ContributionMatrix.Contains(Key))
+    {
+        BaseContribution = ContributionMatrix[Key];
+    }
+    
+    // Apply personality quirks if any
+    if (PersonalityQuirks.Contains(Key))
+    {
+        BaseContribution += PersonalityQuirks[Key];
+    }
+    
+    return FMath::Clamp(BaseContribution, -1.0f, 1.0f);
+}
+
+float AAITeamController::ScoreAction(EAIAction Action)
+{
+    float TotalScore = 0.0f;
+    
+    // Sum contributions across all goals, weighted by goal importance
+    for (auto& GoalPair : GoalWeights)
+    {
+        float Contribution = GetContribution(Action, GoalPair.Key);
+        TotalScore += GoalPair.Value * Contribution;
+    }
+    
+    // Apply feasibility multiplier (0 if impossible, 1 if fully possible)
+    float Feasibility = GetActionFeasibility(Action);
+    TotalScore *= Feasibility;
+    
+    return TotalScore;
+}
+
+float AAITeamController::GetActionFeasibility(EAIAction Action)
+{
+    FActionConfig& Config = ActionConfigs[Action];
+    
+    if (Config.bIsVehicleAction)
+    {
+        // Vehicle actions need minimum vehicles
+        if (Pressures.VehiclesOwned < Config.MinVehicles)
+        {
+            return 0.0f;
+        }
+        
+        // Special case: city capture needs confidence
+        if (Action == EAIAction::CaptureCities)
+        {
+            if (!CachedBestTarget.City)
+            {
+                return 0.0f;
+            }
+            if (CachedBestTarget.ConfidenceRatio < 0.7f)
+            {
+                return 0.0f;
+            }
+            // Scale feasibility with confidence
+            return FMath::Clamp((CachedBestTarget.ConfidenceRatio - 0.7f) / 0.8f, 0.0f, 1.0f);
+        }
+        
+        // Resource capture needs available resources
+        if (Action == EAIAction::CaptureResources)
+        {
+            if (Pressures.ProximalNeutralResources == 0)
+            {
+                return 0.0f;
+            }
+        }
+        
+        if (Action == EAIAction::CaptureEnemyResources)
+        {
+            if (Pressures.EnemyResources == 0 && Pressures.NonProximalNeutralResources == 0)
+            {
+                return 0.0f;
+            }
+        }
+        
+        return 1.0f;
+    }
+    else
+    {
+        // Building actions need money
+        if (Money < Config.Cost)
+        {
+            return 0.0f;
+        }
+        return 1.0f;
+    }
+}
+
+void AAITeamController::ScoreAllActions()
+{
+    ActionScores.Empty();
+    
+    for (auto& Pair : ActionConfigs)
+    {
+        float Score = ScoreAction(Pair.Key);
+        ActionScores.Add(Pair.Key, Score);
+    }
+    
+    // Sort actions by score (highest first)
+    SortedActions.Empty();
+    ActionScores.GetKeys(SortedActions);
+    SortedActions.Sort([this](const EAIAction& A, const EAIAction& B)
+    {
+        return ActionScores[A] > ActionScores[B];
+    });
+}
+
+//=============================================================================
+// PHASE 3: RESOURCE ALLOCATION AND EXECUTION
+//=============================================================================
+
+void AAITeamController::AllocateResourcesToActions()
+{
+    // Reset allocations
+    for (auto& Pair : ActionConfigs)
+    {
+        Pair.Value.AllocatedVehicles = 0;
+        Pair.Value.AllocatedMoney = 0;
+        Pair.Value.bCanExecute = false;
+    }
+    
+    int32 VehiclesRemaining = Pressures.VehiclesOwned;
+    int32 MoneyRemaining = Money;
+    
+    // Allocate in order of score (highest first)
+    for (EAIAction Action : SortedActions)
+    {
+        float Score = ActionScores[Action];
+        if (Score <= 0.0f)
+        {
+            continue;  // Skip negative-value actions
+        }
+        
+        FActionConfig& Config = ActionConfigs[Action];
+        
+        if (Config.bIsVehicleAction)
+        {
+            // Calculate vehicles to allocate based on relative score
+            // Higher-scoring actions get more vehicles
+            float ScoreRatio = Score / FMath::Max(0.01f, GetTotalPositiveScore());
+            int32 IdealVehicles = FMath::RoundToInt(Pressures.VehiclesOwned * ScoreRatio);
+            
+            // Clamp to config limits and available vehicles
+            int32 ToAllocate = FMath::Clamp(IdealVehicles, Config.MinVehicles, Config.MaxVehicles);
+            ToAllocate = FMath::Min(ToAllocate, VehiclesRemaining);
+            
+            if (ToAllocate >= Config.MinVehicles)
+            {
+                Config.AllocatedVehicles = ToAllocate;
+                Config.bCanExecute = true;
+                VehiclesRemaining -= ToAllocate;
+            }
+        }
+        else
+        {
+            // Building action - allocate money if affordable
+            if (MoneyRemaining >= Config.Cost)
+            {
+                Config.AllocatedMoney = Config.Cost;
+                Config.bCanExecute = true;
+                MoneyRemaining -= Config.Cost;
+            }
+        }
+    }
+}
+
+float AAITeamController::GetTotalPositiveScore()
+{
+    float Total = 0.0f;
+    for (auto& Pair : ActionScores)
+    {
+        if (Pair.Value > 0.0f)
+        {
+            Total += Pair.Value;
+        }
+    }
+    return Total;
+}
+
+void AAITeamController::ExecuteActions()
+{
+    AssignedVehicles.Empty();
+    TArray<AVehicleActor*> AvailableVehicles = GetTeamVehicles();
+    
+    // Execute in priority order
+    for (EAIAction Action : SortedActions)
+    {
+        FActionConfig& Config = ActionConfigs[Action];
+        
+        if (!Config.bCanExecute)
+        {
+            continue;
+        }
+        
+        switch (Action)
+        {
+        case EAIAction::DefendCities:
+            ExecuteDefense(AvailableVehicles, Config.AllocatedVehicles);
+            break;
+        case EAIAction::CaptureCities:
+            ExecuteCityAttack(AvailableVehicles, Config.AllocatedVehicles);
+            break;
+        case EAIAction::AttackVehicles:
+            ExecuteAttackVehicles(AvailableVehicles, Config.AllocatedVehicles);
+            break;
+        case EAIAction::CaptureResources:
+            ExecuteResourceCapture(AvailableVehicles, Config.AllocatedVehicles);
+            break;
+        case EAIAction::CaptureEnemyResources:
+            ExecuteCaptureEnemyResources(AvailableVehicles, Config.AllocatedVehicles);
+            break;
+        case EAIAction::BuildVehicles:
+            ExecuteBuildVehicles();
+            break;
+        case EAIAction::BuildTurrets:
+            ExecuteBuildTurrets();
+            break;
+        case EAIAction::BuildFactories:
+            ExecuteBuildFactories();
+            break;
+        }
+    }
+}
+
+//=============================================================================
+// ACTION EXECUTION (vehicle assignment)
+//=============================================================================
+
+void AAITeamController::ExecuteDefense(TArray<AVehicleActor*>& AvailableVehicles, int32 VehiclesToAllocate)
+{
+    TArray<ACityActor*> CitiesToDefend = GetTeamCities();
+    if (CitiesToDefend.Num() == 0 || VehiclesToAllocate <= 0)
+    {
+        return;
+    }
+
+    // Prioritize cities by threat level × strategic value
+    struct FCityPriority
+    {
+        ACityActor* City;
+        float Priority;
+    };
+    
+    TArray<FCityPriority> Priorities;
+    float TotalPriority = 0.0f;
+    
+    for (ACityActor* City : CitiesToDefend)
+    {
+        if (!City) continue;
+        
+        FCityPriority P;
+        P.City = City;
+        
+        float ThreatLevel = CityDefenseTracking.Contains(City) ? CityDefenseTracking[City].ThreatLevel : 0.0f;
+        float StrategicValue = 1.0f + City->GetFactoryCount() * 2.0f + City->GetTurretCount() * 0.5f;
+        float HealthUrgency = (1.0f - (City->CurrentHealth / City->MaxHealth)) * 2.0f;
+        
+        P.Priority = (ThreatLevel > 10.0f) ? (ThreatLevel * StrategicValue) : (StrategicValue * HealthUrgency * 0.5f);
+        
+        if (P.Priority > 0.0f)
+        {
+            Priorities.Add(P);
+            TotalPriority += P.Priority;
+        }
+    }
+    
+    if (Priorities.Num() == 0)
+    {
+        return;  // Nothing needs defending
+    }
+    
+    Priorities.Sort([](const FCityPriority& A, const FCityPriority& B)
+    {
+        return A.Priority > B.Priority;
+    });
+    
+    int32 Allocated = 0;
+    
+    for (const FCityPriority& P : Priorities)
+    {
+        if (Allocated >= VehiclesToAllocate) break;
+        
+        int32 DefendersForCity = FMath::Max(1, FMath::RoundToInt(VehiclesToAllocate * (P.Priority / TotalPriority)));
+        int32 CityDefenders = 0;
+        
+        for (AVehicleActor* Vehicle : AvailableVehicles)
+        {
+            if (Allocated >= VehiclesToAllocate || CityDefenders >= DefendersForCity) break;
+            
+            if (!AssignedVehicles.Contains(Vehicle) && !Vehicle->bHasTarget && !Vehicle->TargetResource)
+            {
+                Vehicle->AssignedAction = EAIAction::DefendCities;
+                Vehicle->bHasAssignment = true;
+                Vehicle->DefendedCity = P.City;
+                Vehicle->AIController = this;
+                
+                AssignedVehicles.Add(Vehicle);
+                CityDefenders++;
+                Allocated++;
+            }
+        }
+    }
+}
+
+void AAITeamController::ExecuteCityAttack(TArray<AVehicleActor*>& AvailableVehicles, int32 VehiclesToAllocate)
+{
+    if (VehiclesToAllocate <= 0 || !CachedBestTarget.City)
+    {
+        return;
+    }
+    
+    // Don't attack unless we have enough force
+    if (VehiclesToAllocate < CachedBestTarget.VehiclesNeeded)
+    {
+        return;
+    }
+    
+    // Calculate overkill ratio based on personality (cautious = more overkill)
+    float OverkillRatio = 1.0f + (Personality.Caution * 0.5f);
+    int32 VehiclesToSend = FMath::Min(VehiclesToAllocate, 
+        FMath::CeilToInt(CachedBestTarget.VehiclesNeeded * OverkillRatio));
+    
+    int32 Allocated = 0;
+    
+    for (AVehicleActor* Vehicle : AvailableVehicles)
+    {
+        if (Allocated >= VehiclesToSend) break;
+        
+        if (!AssignedVehicles.Contains(Vehicle) && !Vehicle->bHasTarget && !Vehicle->TargetResource)
+        {
+            Vehicle->AssignedAction = EAIAction::CaptureCities;
+            Vehicle->bHasAssignment = true;
+            Vehicle->CurrentTarget = CachedBestTarget.City;
+            Vehicle->AIController = this;
+            
+            AssignedVehicles.Add(Vehicle);
+            Allocated++;
+        }
+    }
+    
+    if (Allocated > 0)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("AI Team %d: Attacking %s with %d vehicles (needed %d, confidence %.1fx)"),
+            (int32)ControlledTeam, *CachedBestTarget.City->GetName(), Allocated,
+            CachedBestTarget.VehiclesNeeded, CachedBestTarget.ConfidenceRatio);
+    }
+}
+
+void AAITeamController::ExecuteAttackVehicles(TArray<AVehicleActor*>& AvailableVehicles, int32 VehiclesToAllocate)
+{
+    if (VehiclesToAllocate <= 0) return;
+    
+    int32 Allocated = 0;
+    
+    for (AVehicleActor* Vehicle : AvailableVehicles)
+    {
+        if (Allocated >= VehiclesToAllocate) break;
+        
+        if (!AssignedVehicles.Contains(Vehicle) && !Vehicle->bHasTarget && !Vehicle->TargetResource)
+        {
+            Vehicle->AssignedAction = EAIAction::AttackVehicles;
+            Vehicle->bHasAssignment = true;
+            Vehicle->AIController = this;
+            
+            AssignedVehicles.Add(Vehicle);
+            Allocated++;
+        }
+    }
+}
+
+void AAITeamController::ExecuteResourceCapture(TArray<AVehicleActor*>& AvailableVehicles, int32 VehiclesToAllocate)
+{
+    if (VehiclesToAllocate <= 0) return;
+    
+    int32 Allocated = 0;
+    
+    for (AVehicleActor* Vehicle : AvailableVehicles)
+    {
+        if (Allocated >= VehiclesToAllocate) break;
+        
+        if (!AssignedVehicles.Contains(Vehicle) && !Vehicle->bHasTarget && !Vehicle->TargetResource)
+        {
+            Vehicle->AssignedAction = EAIAction::CaptureResources;
+            Vehicle->bHasAssignment = true;
+            Vehicle->AIController = this;
+            
+            AssignedVehicles.Add(Vehicle);
+            Allocated++;
+        }
+    }
+}
+
+void AAITeamController::ExecuteCaptureEnemyResources(TArray<AVehicleActor*>& AvailableVehicles, int32 VehiclesToAllocate)
+{
+    if (VehiclesToAllocate <= 0) return;
+    
+    int32 Allocated = 0;
+    
+    for (AVehicleActor* Vehicle : AvailableVehicles)
+    {
+        if (Allocated >= VehiclesToAllocate) break;
+        
+        if (!AssignedVehicles.Contains(Vehicle) && !Vehicle->bHasTarget && !Vehicle->TargetResource)
+        {
+            Vehicle->AssignedAction = EAIAction::CaptureEnemyResources;
+            Vehicle->bHasAssignment = true;
+            Vehicle->AIController = this;
+            
+            AssignedVehicles.Add(Vehicle);
+            Allocated++;
+        }
+    }
+}
+
+//=============================================================================
+// ACTION EXECUTION (building)
+//=============================================================================
+
+void AAITeamController::ExecuteBuildVehicles()
+{
+    ACityActor* BuildCity = FindBestCityToBuildAt();
+    if (!BuildCity) return;
+    
+    int32 Cost = ActionConfigs[EAIAction::BuildVehicles].Cost;
+    if (Money < Cost) return;
+    
+    // Spawn vehicle
+    FVector CityLocation = BuildCity->GetActorLocation();
+    FVector CityDirection = (CityLocation - BuildCity->PlanetCenter).GetSafeNormal();
+    
+    FVector RandomTangent1 = FVector::CrossProduct(CityDirection, FVector::UpVector).GetSafeNormal();
+    if (RandomTangent1.IsNearlyZero())
+    {
+        RandomTangent1 = FVector::CrossProduct(CityDirection, FVector::RightVector).GetSafeNormal();
+    }
+    FVector RandomTangent2 = FVector::CrossProduct(CityDirection, RandomTangent1).GetSafeNormal();
+    
+    float RandomAngle = FMath::FRandRange(0.0f, 2.0f * PI);
+    float TurretRadius = BuildCity->CalculateTurretRadius();
+    float SpawnDistance = TurretRadius + FMath::FRandRange(1000.0f, 1500.0f);
+    
+    FVector Offset = (RandomTangent1 * FMath::Cos(RandomAngle) + RandomTangent2 * FMath::Sin(RandomAngle)) * SpawnDistance;
+    FVector SpawnDirection = (CityDirection * BuildCity->PlanetRadius + Offset).GetSafeNormal();
+    FVector SpawnLocation = BuildCity->PlanetCenter + SpawnDirection * BuildCity->PlanetRadius;
+    
+    FActorSpawnParameters SpawnParams;
+    SpawnParams.Owner = BuildCity;
+    
+    AVehicleActor* NewVehicle = GetWorld()->SpawnActor<AVehicleActor>(
+        AVehicleActor::StaticClass(), SpawnLocation, FRotator::ZeroRotator, SpawnParams);
+    
+    if (NewVehicle)
+    {
+        NewVehicle->PlanetCenter = BuildCity->PlanetCenter;
+        NewVehicle->PlanetRadius = BuildCity->PlanetRadius;
+        NewVehicle->OwnerTeam = ControlledTeam;
+        NewVehicle->AlignToPlanet();
+        NewVehicle->UpdateColor();
+        
+        Money -= Cost;
+    }
+}
+
+void AAITeamController::ExecuteBuildTurrets()
+{
+    int32 Cost = ActionConfigs[EAIAction::BuildTurrets].Cost;
+    if (Money < Cost) return;
+    
+    // Build at most threatened city
+    TArray<ACityActor*> Cities = GetTeamCities();
+    Cities.Sort([this](const ACityActor& A, const ACityActor& B)
+    {
+        float ThreatA = CityDefenseTracking.Contains(&A) ? CityDefenseTracking[&A].ThreatLevel : 0.0f;
+        float ThreatB = CityDefenseTracking.Contains(&B) ? CityDefenseTracking[&B].ThreatLevel : 0.0f;
+        return ThreatA > ThreatB;
+    });
+    
+    for (ACityActor* City : Cities)
+    {
+        if (City)
+        {
+            ATurretBuildingActor* NewTurret = City->AddTurret();
+            if (NewTurret)
+            {
+                Money -= Cost;
+                return;
+            }
+        }
+    }
+}
+
+void AAITeamController::ExecuteBuildFactories()
+{
+    int32 Cost = ActionConfigs[EAIAction::BuildFactories].Cost;
+    if (Money < Cost) return;
+    
+    // Build at safest city (highest health)
+    TArray<ACityActor*> Cities = GetTeamCities();
+    Cities.Sort([](const ACityActor& A, const ACityActor& B)
+    {
+        return (A.CurrentHealth / A.MaxHealth) > (B.CurrentHealth / B.MaxHealth);
+    });
+    
+    for (ACityActor* City : Cities)
+    {
+        if (City)
+        {
+            AFactoryBuildingActor* NewFactory = City->AddFactory();
+            if (NewFactory)
+            {
+                Money -= Cost;
+                return;
+            }
+        }
+    }
+}
+
+//=============================================================================
+// HELPER FUNCTIONS
+//=============================================================================
+
+FCityAssessment AAITeamController::FindBestAttackTarget()
+{
+    FCityAssessment Best;
+    Best.City = nullptr;
+    Best.ConfidenceRatio = 0.0f;
+    float BestScore = -FLT_MAX;
+    
+    TArray<AActor*> AllCities;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCities);
+    
+    for (AActor* Actor : AllCities)
+    {
+        ACityActor* City = Cast<ACityActor>(Actor);
+        if (!City || City->OwnerTeam == ControlledTeam || City->OwnerTeam == EOwnerTeam::Neutral)
+        {
+            continue;
+        }
+        
+        FCityAssessment Assessment = AssessEnemyCity(City);
+        
+        // Score = confidence (can we win?) + strategic value (is it worth it?)
+        float Score = (Assessment.ConfidenceRatio * 0.6f) + (Assessment.StrategicValue * 0.4f);
+        
+        if (Score > BestScore)
+        {
+            BestScore = Score;
+            Best = Assessment;
+        }
+    }
+    
+    return Best;
+}
+
+FCityAssessment AAITeamController::AssessEnemyCity(ACityActor* City)
+{
+    FCityAssessment Assessment;
+    Assessment.City = City;
+    
+    if (!City)
+    {
+        Assessment.EffectiveStrength = 0.0f;
+        Assessment.VehiclesNeeded = 1;
+        Assessment.ConfidenceRatio = 10.0f;
+        Assessment.StrategicValue = 0.0f;
+        return Assessment;
+    }
+    
+    // Calculate effective strength
+    float CityHP = City->CurrentHealth;
+    int32 TurretCount = City->GetTurretCount();
+    float TurretHP = TurretCount * 200.0f;
+    float TurretDamage = TurretCount * 200.0f;  // Damage they'll deal during attack
+    
+    // Count nearby defenders
+    int32 Defenders = 0;
+    TArray<AActor*> AllVehicles;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+    
+    for (AActor* Actor : AllVehicles)
+    {
+        AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
+        if (Vehicle && Vehicle->OwnerTeam == City->OwnerTeam)
+        {
+            float Distance = FVector::Dist(Vehicle->GetActorLocation(), City->GetActorLocation());
+            if (Distance < 2000.0f)
+            {
+                Defenders++;
+            }
+        }
+    }
+    float DefenderThreat = Defenders * 100.0f;
+    
+    Assessment.EffectiveStrength = CityHP + TurretHP + TurretDamage + DefenderThreat;
+    
+    // Calculate vehicles needed (each vehicle does ~150 effective damage)
+    Assessment.VehiclesNeeded = FMath::Max(3, FMath::CeilToInt(Assessment.EffectiveStrength / 150.0f));
+    
+    // Confidence ratio
+    Assessment.ConfidenceRatio = (float)Pressures.VehiclesOwned / (float)Assessment.VehiclesNeeded;
+    
+    // Strategic value (weakness + nearby resources)
+    float WeaknessFactor = FMath::Clamp(1.0f - (Assessment.EffectiveStrength / 3000.0f), 0.2f, 1.0f);
+    
+    int32 NearbyResources = 0;
+    TArray<AActor*> AllResources;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResources);
+    for (AActor* Actor : AllResources)
+    {
+        AResourceActor* Resource = Cast<AResourceActor>(Actor);
+        if (Resource)
+        {
+            float Distance = FVector::Dist(Resource->GetActorLocation(), City->GetActorLocation());
+            if (Distance < 3000.0f)
+            {
+                NearbyResources++;
+            }
+        }
+    }
+    float ResourceFactor = 0.5f + FMath::Min(0.5f, NearbyResources * 0.1f);
+    
+    Assessment.StrategicValue = WeaknessFactor * ResourceFactor;
+    
+    return Assessment;
+}
+
+ACityActor* AAITeamController::FindBestCityToBuildAt()
+{
+    TArray<ACityActor*> Cities = GetTeamCities();
+    if (Cities.Num() == 0) return nullptr;
+    if (Cities.Num() == 1) return Cities[0];
+    
+    // Score by threat level (build where needed)
+    ACityActor* Best = nullptr;
+    float BestScore = -FLT_MAX;
+    
+    for (ACityActor* City : Cities)
+    {
+        if (!City) continue;
+        
+        float Score = 0.0f;
+        FVector CityLocation = City->GetActorLocation();
+        
+        // Count nearby threats
+        TArray<AActor*> AllVehicles;
+        UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+        
+        for (AActor* Actor : AllVehicles)
+        {
+            AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
+            if (Vehicle && Vehicle->OwnerTeam != ControlledTeam)
+            {
+                float Distance = FVector::Dist(CityLocation, Vehicle->GetActorLocation());
+                if (Distance < 3000.0f)
+                {
+                    Score += 10.0f;
+                }
+            }
+        }
+        
+        // Frontline bonus
+        TArray<AActor*> AllCities;
+        UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCities);
+        
+        for (AActor* Actor : AllCities)
+        {
+            ACityActor* OtherCity = Cast<ACityActor>(Actor);
+            if (OtherCity && OtherCity->OwnerTeam != ControlledTeam && OtherCity->OwnerTeam != EOwnerTeam::Neutral)
+            {
+                float Distance = FVector::Dist(CityLocation, OtherCity->GetActorLocation());
+                if (Distance < 5000.0f)
+                {
+                    Score += 5.0f;
+                }
+            }
+        }
+        
+        if (Score > BestScore)
+        {
+            BestScore = Score;
+            Best = City;
+        }
+    }
+    
+    return Best ? Best : Cities[0];
+}
+
+AResourceActor* AAITeamController::FindBestResourceToCapture(FVector VehicleLocation)
+{
+    TArray<AActor*> AllResources;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResources);
+    
+    TArray<ACityActor*> OurCities = GetTeamCities();
+    TArray<AVehicleActor*> OurVehicles = GetTeamVehicles();
+    
+    if (OurCities.Num() == 0) return nullptr;
+    
+    // Get enemy cities for proximity check
+    TArray<AActor*> AllCitiesActors;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCitiesActors);
+    TArray<ACityActor*> EnemyCities;
+    for (AActor* Actor : AllCitiesActors)
+    {
+        ACityActor* City = Cast<ACityActor>(Actor);
+        if (City && City->OwnerTeam != ControlledTeam && City->OwnerTeam != EOwnerTeam::Neutral)
+        {
+            EnemyCities.Add(City);
+        }
+    }
+    
+    AResourceActor* Best = nullptr;
+    float BestDistance = FLT_MAX;
+    
+    for (AActor* Actor : AllResources)
+    {
+        AResourceActor* Resource = Cast<AResourceActor>(Actor);
+        if (!Resource || Resource->OwnerTeam == ControlledTeam) continue;
+        if (Resource->OwnerTeam != EOwnerTeam::Neutral) continue;  // Only neutral resources
+        
+        // Check if already targeted
+        bool bTargeted = false;
+        for (AVehicleActor* V : OurVehicles)
+        {
+            if (V->TargetResource == Resource)
+            {
+                bTargeted = true;
+                break;
+            }
+        }
+        if (bTargeted) continue;
+        
+        FVector ResourceLocation = Resource->GetActorLocation();
+        
+        // Must be proximal (closer to us than enemy)
+        float NearestOurCity = FLT_MAX;
+        for (ACityActor* City : OurCities)
+        {
+            NearestOurCity = FMath::Min(NearestOurCity, FVector::Dist(City->GetActorLocation(), ResourceLocation));
+        }
+        
+        float NearestEnemyCity = FLT_MAX;
+        for (ACityActor* City : EnemyCities)
+        {
+            NearestEnemyCity = FMath::Min(NearestEnemyCity, FVector::Dist(City->GetActorLocation(), ResourceLocation));
+        }
+        
+        if (NearestOurCity >= NearestEnemyCity) continue;  // Not proximal
+        
+        // Pick closest to vehicle
+        float Distance = FVector::Dist(VehicleLocation, ResourceLocation);
+        if (Distance < BestDistance)
+        {
+            BestDistance = Distance;
+            Best = Resource;
+        }
+    }
+    
+    return Best;
+}
+
+AResourceActor* AAITeamController::FindBestEnemyResourceToCapture(FVector VehicleLocation)
+{
+    TArray<AActor*> AllResources;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResources);
+    
+    TArray<ACityActor*> OurCities = GetTeamCities();
+    TArray<AVehicleActor*> OurVehicles = GetTeamVehicles();
+    
+    if (OurCities.Num() == 0) return nullptr;
+    
+    AResourceActor* Best = nullptr;
+    float BestScore = FLT_MAX;
+    
+    for (AActor* Actor : AllResources)
+    {
+        AResourceActor* Resource = Cast<AResourceActor>(Actor);
+        if (!Resource || Resource->OwnerTeam == ControlledTeam) continue;
+        if (Resource->OwnerTeam == EOwnerTeam::Neutral) continue;  // Only enemy resources
+        
+        // Check if already targeted
+        bool bTargeted = false;
+        for (AVehicleActor* V : OurVehicles)
+        {
+            if (V->TargetResource == Resource)
+            {
+                bTargeted = true;
+                break;
+            }
+        }
+        if (bTargeted) continue;
+        
+        FVector ResourceLocation = Resource->GetActorLocation();
+        
+        // Score by distance to vehicle + distance to nearest city
+        float NearestCityDist = FLT_MAX;
+        for (ACityActor* City : OurCities)
+        {
+            NearestCityDist = FMath::Min(NearestCityDist, FVector::Dist(City->GetActorLocation(), ResourceLocation));
+        }
+        
+        float VehicleDist = FVector::Dist(VehicleLocation, ResourceLocation);
+        float Score = (NearestCityDist * 0.4f) + (VehicleDist * 0.6f);
+        
+        if (Score < BestScore)
+        {
+            BestScore = Score;
+            Best = Resource;
+        }
+    }
+    
+    return Best;
+}
+
+AVehicleActor* AAITeamController::FindBestEnemyVehicle(FVector FromLocation)
+{
+    TArray<AActor*> AllVehicles;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+    
+    AVehicleActor* Best = nullptr;
+    float BestScore = FLT_MAX;
+    
+    for (AActor* Actor : AllVehicles)
+    {
+        AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
+        if (!Vehicle || Vehicle->OwnerTeam == ControlledTeam) continue;
+        
+        float Distance = FVector::Dist(FromLocation, Vehicle->GetActorLocation());
+        float HealthFactor = Vehicle->CurrentHealth / Vehicle->MaxHealth;
+        
+        float Score = Distance * (0.5f + HealthFactor * 0.5f);  // Prefer closer + weaker
+        
+        if (Score < BestScore)
+        {
+            BestScore = Score;
+            Best = Vehicle;
+        }
+    }
+    
+    return Best;
+}
+
+AVehicleActor* AAITeamController::FindBestEnemyNearCity(ACityActor* City, FVector FromLocation)
+{
+    if (!City) return nullptr;
+    
+    TArray<AActor*> AllVehicles;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+    
+    AVehicleActor* Best = nullptr;
+    float BestScore = FLT_MAX;
+    
+    for (AActor* Actor : AllVehicles)
+    {
+        AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
+        if (!Vehicle || Vehicle->OwnerTeam == ControlledTeam) continue;
+        
+        float DistToCity = FVector::Dist(City->GetActorLocation(), Vehicle->GetActorLocation());
+        float DistToDefender = FVector::Dist(FromLocation, Vehicle->GetActorLocation());
+        
+        float Score = (DistToCity * 0.7f) + (DistToDefender * 0.3f);
+        Score *= (0.5f + (Vehicle->CurrentHealth / Vehicle->MaxHealth) * 0.5f);
+        
+        if (Score < BestScore)
+        {
+            BestScore = Score;
+            Best = Vehicle;
+        }
+    }
+    
+    return Best;
+}
+
+FVector AAITeamController::GetDefensePosition(ACityActor* CityToDefend, int32 DefenderIndex)
+{
+    if (!CityToDefend) return FVector::ZeroVector;
+    
+    FVector CityLocation = CityToDefend->GetActorLocation();
+    FVector CityDirection = (CityLocation - CityToDefend->PlanetCenter).GetSafeNormal();
+    
+    FVector Tangent1 = FVector::CrossProduct(CityDirection, FVector::UpVector).GetSafeNormal();
+    if (Tangent1.IsNearlyZero())
+    {
+        Tangent1 = FVector::CrossProduct(CityDirection, FVector::RightVector).GetSafeNormal();
+    }
+    FVector Tangent2 = FVector::CrossProduct(CityDirection, Tangent1).GetSafeNormal();
+    
+    float Angle = DefenderIndex * (2.0f * PI / 8.0f);
+    float Radius = 800.0f;
+    
+    FVector Offset = (Tangent1 * FMath::Cos(Angle) + Tangent2 * FMath::Sin(Angle)) * Radius;
+    FVector DefenseDirection = (CityDirection * CityToDefend->PlanetRadius + Offset).GetSafeNormal();
+    
+    return CityToDefend->PlanetCenter + DefenseDirection * CityToDefend->PlanetRadius;
+}
+
+//=============================================================================
+// ENTITY GETTERS
+//=============================================================================
+
+TArray<AVehicleActor*> AAITeamController::GetTeamVehicles()
+{
+    TArray<AVehicleActor*> Result;
+    TArray<AActor*> AllVehicles;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+    
+    for (AActor* Actor : AllVehicles)
+    {
+        AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
+        if (Vehicle && Vehicle->OwnerTeam == ControlledTeam)
+        {
+            Result.Add(Vehicle);
+        }
+    }
+    return Result;
+}
+
+TArray<ACityActor*> AAITeamController::GetTeamCities()
+{
+    TArray<ACityActor*> Result;
+    TArray<AActor*> AllCities;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCities);
+    
+    for (AActor* Actor : AllCities)
+    {
+        ACityActor* City = Cast<ACityActor>(Actor);
+        if (City && City->OwnerTeam == ControlledTeam)
+        {
+            Result.Add(City);
+        }
+    }
+    return Result;
+}
+
+TArray<AResourceActor*> AAITeamController::GetTeamResources()
+{
+    TArray<AResourceActor*> Result;
+    TArray<AActor*> AllResources;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResources);
+    
+    for (AActor* Actor : AllResources)
+    {
+        AResourceActor* Resource = Cast<AResourceActor>(Actor);
+        if (Resource && Resource->OwnerTeam == ControlledTeam)
+        {
+            Result.Add(Resource);
+        }
+    }
+    return Result;
+}
+
+//=============================================================================
+// DEBUG LOGGING
+//=============================================================================
+
+void AAITeamController::LogAIState()
+{
+    UE_LOG(LogTemp, Warning, TEXT("\n========== AI TEAM %d STATE =========="), (int32)ControlledTeam);
+    
+    // Pressures
+    UE_LOG(LogTemp, Warning, TEXT("PRESSURES:"));
+    UE_LOG(LogTemp, Warning, TEXT("  Economy: $%d | Income: $%d/min | Resources: %d owned, %d proximal, %d non-proximal"),
+        Money, Pressures.IncomePerMinute, Pressures.OwnedResources, 
+        Pressures.ProximalNeutralResources, Pressures.NonProximalNeutralResources);
+    UE_LOG(LogTemp, Warning, TEXT("  Military: %d vehicles | %d cities"),
+        Pressures.VehiclesOwned, Pressures.CitiesOwned);
+    UE_LOG(LogTemp, Warning, TEXT("  Threats: %d cities under attack | %d proximal enemies | %.0f total threat"),
+        Pressures.CitiesUnderAttack, Pressures.ProximalEnemyVehicles, Pressures.TotalThreatLevel);
+    
+    // Goals
+    UE_LOG(LogTemp, Warning, TEXT("GOALS:"));
+    for (auto& Pair : GoalWeights)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("  %s: %.1f%%"), *GoalToString(Pair.Key), Pair.Value * 100.0f);
+    }
+    
+    // Actions
+    UE_LOG(LogTemp, Warning, TEXT("ACTIONS (sorted by score):"));
+    for (EAIAction Action : SortedActions)
+    {
+        FActionConfig& Config = ActionConfigs[Action];
+        UE_LOG(LogTemp, Warning, TEXT("  %s: Score=%.3f | %s | Allocated: %d vehicles, $%d"),
+            *ActionToString(Action), ActionScores[Action],
+            Config.bCanExecute ? TEXT("EXECUTE") : TEXT("skip"),
+            Config.AllocatedVehicles, Config.AllocatedMoney);
+    }
+    
+    // Best target
+    if (CachedBestTarget.City)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BEST TARGET: %s (strength %.0f, need %d vehicles, confidence %.2fx)"),
+            *CachedBestTarget.City->GetName(), CachedBestTarget.EffectiveStrength,
+            CachedBestTarget.VehiclesNeeded, CachedBestTarget.ConfidenceRatio);
+    }
+    
+    UE_LOG(LogTemp, Warning, TEXT("==========================================\n"));
+}
+
+FString AAITeamController::GoalToString(EStrategicGoal Goal)
+{
+    switch (Goal)
+    {
+    case EStrategicGoal::ConquerEnemy: return TEXT("ConquerEnemy");
+    case EStrategicGoal::DefendTerritory: return TEXT("DefendTerritory");
+    case EStrategicGoal::EconomicGrowth: return TEXT("EconomicGrowth");
+    case EStrategicGoal::MilitaryBuildup: return TEXT("MilitaryBuildup");
+    default: return TEXT("Unknown");
+    }
+}
+
+FString AAITeamController::ActionToString(EAIAction Action)
+{
+    switch (Action)
+    {
+    case EAIAction::CaptureResources: return TEXT("CaptureResources");
+    case EAIAction::CaptureEnemyResources: return TEXT("CaptureEnemyResources");
+    case EAIAction::CaptureCities: return TEXT("CaptureCities");
+    case EAIAction::AttackVehicles: return TEXT("AttackVehicles");
+    case EAIAction::DefendCities: return TEXT("DefendCities");
+    case EAIAction::BuildVehicles: return TEXT("BuildVehicles");
+    case EAIAction::BuildTurrets: return TEXT("BuildTurrets");
+    case EAIAction::BuildFactories: return TEXT("BuildFactories");
+    default: return TEXT("Unknown");
+    }
+}
+
+
+
+
+Header File:
+
+// Strategic goals
+UENUM(BlueprintType)
+enum class EStrategicGoal : uint8
+{
+    ConquerEnemy,
+    DefendTerritory,
+    EconomicGrowth,
+    MilitaryBuildup
+};
+
+// Personality structure
+USTRUCT(BlueprintType)
+struct FAIPersonality
+{
+    GENERATED_BODY()
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    float Aggression = 0.5f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    float Greed = 0.5f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    float Caution = 0.5f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    float Patience = 0.5f;
+};
+
+// Action configuration
+USTRUCT(BlueprintType)
+struct FActionConfig
+{
+    GENERATED_BODY()
+    
+    int32 MinVehicles = 0;
+    int32 MaxVehicles = 10;
+    int32 Cost = 0;
+    bool bIsVehicleAction = true;
+    
+    // Runtime state
+    int32 AllocatedVehicles = 0;
+    int32 AllocatedMoney = 0;
+    bool bCanExecute = false;
+};
+
+// City assessment for attack planning
+USTRUCT(BlueprintType)
+struct FCityAssessment
+{
+    GENERATED_BODY()
+    
+    ACityActor* City = nullptr;
+    float EffectiveStrength = 0.0f;
+    int32 VehiclesNeeded = 0;
+    float ConfidenceRatio = 0.0f;
+    float StrategicValue = 0.0f;
+};
+
+// In class declaration:
+UPROPERTY()
+TMap<EStrategicGoal, float> GoalWeights;
+
+UPROPERTY()
+TMap<EAIAction, float> ActionScores;
+
+UPROPERTY()
+TArray<EAIAction> SortedActions;
+
+UPROPERTY()
+TMap<TPair<EAIAction, EStrategicGoal>, float> ContributionMatrix;
+
+UPROPERTY()
+TMap<TPair<EAIAction, EStrategicGoal>, float> PersonalityQuirks;
+
+UPROPERTY()
+TMap<EAIAction, FActionConfig> ActionConfigs;
+
+UPROPERTY()
+FCityAssessment CachedBestTarget;
+
+UPROPERTY(EditAnywhere)
+bool bEnableDebugLogging = true;
+
+// Updated pressures struct
+USTRUCT()
+struct FAIPressures
+{
+    GENERATED_BODY()
+    
+    int32 VehiclesOwned = 0;
+    int32 CitiesOwned = 0;
+    int32 OwnedResources = 0;
+    int32 Money = 0;
+    int32 IncomePerMinute = 0;
+    
+    int32 ProximalNeutralResources = 0;
+    int32 NonProximalNeutralResources = 0;
+    int32 EnemyResources = 0;
+    
+    int32 ProximalEnemyCities = 0;
+    int32 ProximalEnemyVehicles = 0;
+    
+    int32 CitiesUnderAttack = 0;
+    float TotalThreatLevel = 0.0f;
+    float LowestCityHealthPercent = 1.0f;
+};
