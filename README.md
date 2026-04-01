@@ -141,7 +141,7 @@ Planet_Conquest/
 ### 2026-02-20 — Continent System
 - Each city, resource node, and Kaiju is assigned a `ContinentID` at spawn
 - AI resource targeting and trade requests are filtered to the same continent
-- Prevents AI factions from attempting unreachable cross-ocean manoeuvres
+- Prevents AI factions from attempting unreachable cross-ocean maneuvres
 
 ---
 
