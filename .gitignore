@@ -20,6 +20,9 @@ Saved/
 # Backup Files
 Backup/
 
+# Planning / Design Notes (local only)
+Planning/
+
 # Starter Content (keep only Materials)
 Content/StarterContent/*
 !Content/StarterContent/Materials/

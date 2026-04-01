@@ -46,11 +46,6 @@ Planet_Conquest/
 │   ├── ArrowTrail/              # VFX assets
 │   └── StarterContent/Materials/# Unreal starter materials (basalt, rock)
 │
-├── Planning/                    # Design documents and architecture notes
-│   ├── AI_Decision_Tree.md
-│   ├── CITY_CAMERA_ARCHITECTURE.md
-│   └── GAME_DESIGN_DOCUMENT.txt
-│
 └── Planet_Conquest.uproject     # Unreal Engine project file
 ```
 
@@ -71,6 +66,8 @@ Planet_Conquest/
 - Domain warping for irregular coastlines
 - Volcano stamping using heightmap textures
 - Dual-material blending (terrain + volcanic basalt)
+
+> **Attribution**: The spherical planet generation technique (cube-sphere subdivision, noise-based heightmap layering) is based on the method described by **Sebastian Lague** in his [Coding Adventures: Procedural Moons and Planets](https://www.youtube.com/watch?v=lctXaT9pxA0) series. His open approach to sharing these techniques made this project possible.
 
 **Vehicle AI** (`VehicleActor.cpp`):
 - Angular math for spherical pathfinding
@@ -126,6 +123,27 @@ Planet_Conquest/
 - More sophisticated diplomatic AI
 - Shader-based ocean waves and foam
 - Planetary weather systems
+
+## Changelog
+
+### 2026-03-23 — Ship Update
+- Added `ShipActor` as a naval subclass of `VehicleActor`
+- Ships continue moving while firing (`bCanMoveWhileFiring = true`) rather than stopping in place
+- Ship projectiles use a high arc (`ProjectileArcHeight = 800`) so shells clear the planet mesh without clipping
+- Ships do not capture land resource nodes after destroying mines (`bCanCaptureResources = false`) — they stay at sea
+- Long coastal bombardment range (8000 units), 3× ground vehicle movement speed
+
+### 2026-03-03 — Performance Optimisation
+- Eliminated per-frame `GetAllActorsOfClass` calls across all major actor types
+- World Tick reduced from ~33 ms → ~0.18 ms (≈180× improvement)
+- HUD alliance display throttled to a 5-second refresh interval
+
+### 2026-02-20 — Continent System
+- Each city, resource node, and Kaiju is assigned a `ContinentID` at spawn
+- AI resource targeting and trade requests are filtered to the same continent
+- Prevents AI factions from attempting unreachable cross-ocean manoeuvres
+
+---
 
 ## License
 
