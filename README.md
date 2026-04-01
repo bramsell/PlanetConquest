@@ -117,12 +117,16 @@ Planet_Conquest/
 
 ## Future Enhancements
 
-- Multiplayer support
-- Save/load system for persistent worlds
-- Additional building types and unit varieties
-- More sophisticated diplomatic AI
-- Shader-based ocean waves and foam
-- Planetary weather systems
+- **Ship waypoint navigation**: Waypoint system for routing ships around continents so naval units pathfind correctly along coastlines
+- **AI naval purchasing**: Add ships to the AI controller's unit-buying logic, enabling intercontinental warfare between factions
+- **Improved continent shaping**: Polar noise functions applied to continent edges while preserving navigable waterways between landmasses
+- **Island generation**: Small procedural islands scattered across ocean regions
+- **Implicit tech tree**: Functional technology progression with concrete gameplay effects (unit upgrades, building unlocks, etc.)
+- **Procedural points of interest**: Research sites around volcanoes, Kaiju territories, and other landmarks that vehicles can occupy to build research stations, tied into the lab building infrastructure
+- **Mountain plateaus with ramps**: Height/slope-aware waypoints (or predefined mountain routes) allowing vehicles to navigate to elevated plateau areas
+- **Save/load system**: Persistent worlds between sessions
+- **More sophisticated diplomatic AI**: Extended alliance, betrayal, and negotiation behaviours
+- **Space expansion**: Launch ports, spaceships, and travel to other procedurally generated planets
 
 ## Changelog
 
