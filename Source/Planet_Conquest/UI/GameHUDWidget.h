@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -101,6 +101,11 @@ private:
 private:
 	// Timer for throttling AI debug updates
 	float AIDebugUpdateTimer = 0.0f;
+
+	// Timer for throttling alliance display rebuilds (rebuilds every 5s or on change)
+	float AlliancesUpdateTimer = 999.0f;
+	// Hash of last-rendered alliance state — skips rebuild when nothing changed
+	uint32 CachedAlliancesHash = 0;
 	
 	// Cached AI debug state to avoid rebuilding UI when values haven't changed
 	int32 CachedDebugTeamIndex = -1;
@@ -121,4 +126,35 @@ private:
 	
 	// Update AI debug display
 	void UpdateAIDebugDisplay();
+
+public:
+	// Step the debug view to the next active AI team
+	UFUNCTION(BlueprintCallable, Category = "Debug")
+	void DebugTeamNext();
+
+	// Step the debug view to the previous active AI team
+	UFUNCTION(BlueprintCallable, Category = "Debug")
+	void DebugTeamLast();
+
+	// ===== C++ ACTOR CACHES — replacement for Blueprint GetAllActorsOfClass nodes =====
+	// Refreshed every 2 seconds in NativeTick. Bind to these in Blueprint instead of
+	// calling GetAllActorsOfClass, which runs a full UObject world traversal every frame.
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUD|Cache")
+	TArray<AActor*> HUDCachedCities;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUD|Cache")
+	TArray<AActor*> HUDCachedVehicles;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUD|Cache")
+	TArray<AActor*> HUDCachedResources;
+
+	// Returns current city count for a given team — use this instead of iterating
+	// HUDCachedCities in Blueprint when you only need a count.
+	UFUNCTION(BlueprintPure, Category = "HUD|Cache")
+	int32 GetCityCountForTeam(uint8 TeamIndex) const;
+
+private:
+	float HUDActorCacheTimer = 999.0f; // Forces immediate refresh on first tick
+	void RefreshHUDActorCaches();
 };

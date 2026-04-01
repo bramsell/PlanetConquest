@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "KaijuActor.h"
 #include "Components/CapsuleComponent.h"
@@ -13,6 +13,7 @@
 #include "../Vehicles/VehicleActor.h"
 #include "../Cities/CityActor.h"
 #include "../Resources/ResourceActor.h"
+#include "../../World/PlanetActor.h"
 #include "../Buildings/BuildingActor.h"
 #include "../Buildings/MineActor.h"
 #include "../../UI/HealthBarWidget.h"
@@ -125,7 +126,21 @@ void AKaijuActor::BeginPlay()
 	
 	// Align to planet
 	AlignToPlanet();
-	
+
+	// Assign continent ID from spawn location
+	{
+		TArray<AActor*> FoundPlanets;
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlanetActor::StaticClass(), FoundPlanets);
+		if (FoundPlanets.Num() > 0)
+		{
+			if (APlanetActor* Planet = Cast<APlanetActor>(FoundPlanets[0]))
+			{
+				FVector SphereDir = (GetActorLocation() - Planet->GetActorLocation()).GetSafeNormal();
+				ContinentID = Planet->GetContinentIdForPoint(SphereDir);
+			}
+		}
+	}
+
 	// Set initial color (red/orange for hostile)
 	UpdateHealthBar();
 	
@@ -150,6 +165,14 @@ void AKaijuActor::Tick(float DeltaTime)
 	
 	// Align to planet surface
 	AlignToPlanet();
+
+	// Refresh vehicle cache every 2s (avoids O(N²) GetAllActorsOfClass in detection)
+	KaijuVehicleCacheTimer += DeltaTime;
+	if (KaijuVehicleCacheTimer >= 2.0f)
+	{
+		KaijuVehicleCacheTimer = FMath::FRandRange(0.0f, 0.5f);
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), CachedKaijuVehicles);
+	}
 	
 	// Update state machine
 	switch (CurrentState)
@@ -638,7 +661,7 @@ void AKaijuActor::UpdateReturning(float DeltaTime)
 
 // ========== HELPER FUNCTIONS ==========
 
-float AKaijuActor::GetDetectionRadius(AVehicleActor* Vehicle)
+float AKaijuActor::GetDetectionRadius(AVehicleActor* Vehicle, const TArray<AActor*>& AllVehicles)
 {
 	if (!Vehicle) return BaseDetectionRadius;
 	
@@ -656,11 +679,8 @@ float AKaijuActor::GetDetectionRadius(AVehicleActor* Vehicle)
 		Radius *= DetectionMultiplierCombat;
 	}
 	
-	// Count nearby vehicles
+	// Count nearby vehicles using the passed-in list (no per-vehicle GetAllActorsOfClass)
 	int32 NearbyVehicles = 0;
-	TArray<AActor*> AllVehicles;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
-	
 	for (AActor* Actor : AllVehicles)
 	{
 		if (FVector::Dist(Vehicle->GetActorLocation(), Actor->GetActorLocation()) < 500.0f)
@@ -722,9 +742,9 @@ float AKaijuActor::CalculateInvasionUrge()
 AVehicleActor* AKaijuActor::FindNearestVehicle(float SearchRadius)
 {
 	if (!GetWorld()) return nullptr;
-	
-	TArray<AActor*> AllVehicles;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+
+	// Use cached vehicle list (refreshed every 2s in Tick - avoids per-frame GetAllActorsOfClass)
+	const TArray<AActor*>& AllVehicles = CachedKaijuVehicles;
 	
 	AVehicleActor* NearestVehicle = nullptr;
 	float NearestDistance = SearchRadius;
@@ -735,7 +755,7 @@ AVehicleActor* AKaijuActor::FindNearestVehicle(float SearchRadius)
 		if (!Vehicle) continue;
 		
 		float Distance = FVector::Dist(GetActorLocation(), Vehicle->GetActorLocation());
-		float VehicleDetectionRadius = GetDetectionRadius(Vehicle);
+		float VehicleDetectionRadius = GetDetectionRadius(Vehicle, AllVehicles);
 		
 		if (Distance < VehicleDetectionRadius && Distance < NearestDistance)
 		{

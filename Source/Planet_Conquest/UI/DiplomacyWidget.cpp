@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "DiplomacyWidget.h"
 #include "TalkDialogueWidget.h"
@@ -169,6 +169,28 @@ FText UDiplomacyWidget::GetOwnerTeamName() const
 		return FText::FromString(TEXT("AI Team 8"));
 	case EOwnerTeam::AI8:
 		return FText::FromString(TEXT("AI Team 9"));
+	case EOwnerTeam::AI9:
+		return FText::FromString(TEXT("AI Team 10"));
+	case EOwnerTeam::AI10:
+		return FText::FromString(TEXT("AI Team 11"));
+	case EOwnerTeam::AI11:
+		return FText::FromString(TEXT("AI Team 12"));
+	case EOwnerTeam::AI12:
+		return FText::FromString(TEXT("AI Team 13"));
+	case EOwnerTeam::AI13:
+		return FText::FromString(TEXT("AI Team 14"));
+	case EOwnerTeam::AI14:
+		return FText::FromString(TEXT("AI Team 15"));
+	case EOwnerTeam::AI15:
+		return FText::FromString(TEXT("AI Team 16"));
+	case EOwnerTeam::AI16:
+		return FText::FromString(TEXT("AI Team 17"));
+	case EOwnerTeam::AI17:
+		return FText::FromString(TEXT("AI Team 18"));
+	case EOwnerTeam::AI18:
+		return FText::FromString(TEXT("AI Team 19"));
+	case EOwnerTeam::AI19:
+		return FText::FromString(TEXT("AI Team 20"));
 	case EOwnerTeam::Neutral:
 		return FText::FromString(TEXT("Neutral"));
 	default:

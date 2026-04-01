@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -77,6 +77,11 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Kaiju|Planet")
 	float PlanetRadius = 10000.0f;
+
+	// Continent this kaiju guards (index into PlanetActor::ContinentSeeds; -1 = ocean/unknown)
+	// Set in BeginPlay from spawn location
+	UPROPERTY(BlueprintReadOnly, Category = "Kaiju|Planet")
+	int32 ContinentID = -1;
 
 	UFUNCTION(BlueprintCallable, Category = "Kaiju")
 	void AlignToPlanet();
@@ -224,7 +229,7 @@ public:
 	void UpdateReturning(float DeltaTime);
 
 	// Helper functions
-	float GetDetectionRadius(AVehicleActor* Vehicle);
+	float GetDetectionRadius(AVehicleActor* Vehicle, const TArray<AActor*>& AllVehicles);
 	bool IsWithinLeash() const;
 	bool ShouldReturn() const;
 	float CalculateInvasionUrge();
@@ -286,4 +291,9 @@ private:
 	
 	// City invasion timer (every 30s, 2% chance)
 	float TimeSinceLastCityInvasionCheck = 0.0f;
+
+	// Vehicle cache to avoid O(N²) GetAllActorsOfClass in detection (refreshed every 2s)
+	UPROPERTY()
+	TArray<AActor*> CachedKaijuVehicles;
+	float KaijuVehicleCacheTimer = 999.0f;
 };

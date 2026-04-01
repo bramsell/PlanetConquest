@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "PlanetActor.h"
 #include "ProceduralMeshComponent.h"
@@ -12,8 +12,15 @@
 #include "../Entities/Cities/CityActor.h"
 #include "../Entities/Vehicles/VehicleActor.h"
 #include "../Entities/Resources/ResourceActor.h"
+#include "../Entities/Buildings/MineActor.h"
 #include "../Core/PlanetConquestPlayerController.h"
 #include "../Core/AITeamController.h"
+
+// =============================================================================
+// DEBUG CONFIG — toggle these to enable/disable debug visualizations and logs
+// =============================================================================
+static constexpr bool bDebugDrawNavWaypoints = false; // Yellow spheres at each nav waypoint in FindPath
+// =============================================================================
 
 APlanetActor::APlanetActor()
 {
@@ -171,6 +178,9 @@ void APlanetActor::BeginPlay()
 	// Always spawn cities on startup
 	SpawnCities();
 
+	// Generate navigation graph for vehicle pathfinding (must be after cities are spawned)
+	GenerateNavGraph();
+
 	// Spawn territory resources around each city
 	SpawnResourcesAroundPlanet();
 
@@ -184,6 +194,17 @@ void APlanetActor::BeginPlay()
 	AITeams.Add(EOwnerTeam::AI6);
 	AITeams.Add(EOwnerTeam::AI7);
 	AITeams.Add(EOwnerTeam::AI8);
+	AITeams.Add(EOwnerTeam::AI9);
+	AITeams.Add(EOwnerTeam::AI10);
+	AITeams.Add(EOwnerTeam::AI11);
+	AITeams.Add(EOwnerTeam::AI12);
+	AITeams.Add(EOwnerTeam::AI13);
+	AITeams.Add(EOwnerTeam::AI14);
+	AITeams.Add(EOwnerTeam::AI15);
+	AITeams.Add(EOwnerTeam::AI16);
+	AITeams.Add(EOwnerTeam::AI17);
+	AITeams.Add(EOwnerTeam::AI18);
+	AITeams.Add(EOwnerTeam::AI19);
 	
 	// Find which AI teams actually have cities
 	TSet<EOwnerTeam> TeamsWithCities;
@@ -195,7 +216,16 @@ void APlanetActor::BeginPlay()
 		}
 	}
 	
+	// Count how many AI teams actually get controllers so we can evenly distribute
+	// decision offsets across the full interval (no two teams fire at the same time).
+	int32 NumAITeams = 0;
+	for (EOwnerTeam Team : AITeams)
+	{
+		if (TeamsWithCities.Contains(Team)) NumAITeams++;
+	}
+
 	// Spawn one AI controller for each team that has cities
+	int32 TeamSpawnIndex = 0;
 	for (EOwnerTeam Team : AITeams)
 	{
 		if (TeamsWithCities.Contains(Team))
@@ -212,11 +242,20 @@ void APlanetActor::BeginPlay()
 			{
 				// Set properties BEFORE BeginPlay runs
 				AIController->ControlledTeam = Team;
+				// Pre-set offset so BeginPlay logs the correct value before it can overwrite it
+				const float Offset = (NumAITeams > 0)
+					? (TeamSpawnIndex * (AIController->DecisionInterval / NumAITeams))
+					: 0.0f;
+				AIController->TimeSinceLastDecision = Offset;
 				AIController->FinishSpawning(FTransform::Identity);
+				// Restore offset in case BeginPlay reset it (defensive)
+				AIController->TimeSinceLastDecision = Offset;
 				
 				AIControllers.Add(AIController);
+				TeamSpawnIndex++;
 				
-				UE_LOG(LogTemp, Log, TEXT("Spawned AITeamController for AI Team %d"), (int32)Team);
+				UE_LOG(LogTemp, Log, TEXT("Spawned AITeamController for AI Team %d (decision offset %.2f s)"),
+					(int32)Team, Offset);
 			}
 		}
 	}
@@ -246,6 +285,9 @@ void APlanetActor::Tick(float DeltaTime)
 		SunLight->SetRelativeRotation(FRotator(-45.0f, CurrentDayNightRotation, 0.0f));
 		FillLight->SetRelativeRotation(FRotator(45.0f, CurrentDayNightRotation + 180.0f, 0.0f));
 	}
+	
+	// DEBUG: Draw all navigation nodes every frame
+	DebugDrawAllNavNodes();
 }
 
 #if WITH_EDITOR
@@ -708,8 +750,8 @@ float APlanetActor::CalculateHeightAtPoint(const FVector& SpherePoint) const
 	}
 
 	// === STEP 1: Apply large-scale continent shape deformation ===
-	// This creates oblong, irregular continent shapes
-	FVector ShapeWarpedPoint = DomainWarp(SpherePoint, ContinentShapeStrength, 1.5f, NoiseSeed);
+	// Domain warp disabled - causes lakes by warping ocean cells into land regions
+	FVector ShapeWarpedPoint = SpherePoint;
 
 	// === STEP 2: Find nearest and second-nearest seeds (using shape-warped point) ===
 	float NearestDist = FLT_MAX;
@@ -744,33 +786,8 @@ float APlanetActor::CalculateHeightAtPoint(const FVector& SpherePoint) const
 	// The boundary constraint will be enforced in the blending calculation
 
 	// === STEP 4: Apply fine-scale coastline detail ===
-	// Near boundaries, make detail warp only subtractive (can only shrink continent)
-	// Far from boundaries, allow full bidirectional warping
-	FVector DetailWarpedPoint;
-	
-	if (DistToBoundary < MinSeparationRadians * 3.0f)
-	{
-		// Near boundary: apply constrained warp
-		// Calculate how much warp would push us toward/away from seed
-		FVector PotentialWarp = DomainWarp(ShapeWarpedPoint, CoastlineDetailStrength, 8.0f, NoiseSeed + 100);
-		float WarpedDist = AngularDistance(PotentialWarp, NearestSeed->Position);
-		
-		// Only allow warp if it increases distance (makes continent smaller)
-		if (WarpedDist > NearestDist)
-		{
-			DetailWarpedPoint = PotentialWarp;
-		}
-		else
-		{
-			// Reject warp, use shape-warped point as-is
-			DetailWarpedPoint = ShapeWarpedPoint;
-		}
-	}
-	else
-	{
-		// Far from boundary: full bidirectional detail warp
-		DetailWarpedPoint = DomainWarp(ShapeWarpedPoint, CoastlineDetailStrength, 8.0f, NoiseSeed + 100);
-	}
+	// Domain warp disabled - passes point through unchanged
+	FVector DetailWarpedPoint = ShapeWarpedPoint;
 
 	// === STEP 5: Check if within continent radius and apply coastline blending ===
 	float FinalDist = AngularDistance(DetailWarpedPoint, NearestSeed->Position);
@@ -823,8 +840,9 @@ float APlanetActor::CalculateHeightAtPoint(const FVector& SpherePoint) const
 		FinalHeight = FMath::Lerp(OceanHeight, LandHeight, BlendFactor);
 	}
 
-	// Add detail noise if enabled (only on land or near-land areas)
-	if (DetailNoiseStrength > 0.0f && DistFromCoastline > -OceanBlendEnd)
+	// Detail noise disabled - FBM noise can create sub-sea-level depressions that appear as lakes
+	// Re-enable once the lake-prevention clamp is confirmed sufficient
+	if (false && DetailNoiseStrength > 0.0f && DistFromCoastline > -OceanBlendEnd)
 	{
 		FVector WorldPoint = SpherePoint * 100000.0f;
 		float DetailNoise = SampleNoise(WorldPoint);
@@ -897,6 +915,15 @@ float APlanetActor::CalculateHeightAtPoint(const FVector& SpherePoint) const
 		}
 	}
 
+	// Clamp: if Voronoi geometry says this is land (DistFromCoastline > 0),
+	// never let FBM detail noise push the height below sea level.
+	// This prevents interior lakes entirely without changing coastline shape.
+	if (DistFromCoastline > 0.0f)
+	{
+		float MinLandHeight = BaseHeight + SeaLevel + 0.001f;
+		FinalHeight = FMath::Max(FinalHeight, MinLandHeight);
+	}
+
 	return FinalHeight;
 }
 
@@ -954,9 +981,10 @@ void APlanetActor::GenerateWaterSphere()
 	TArray<FProcMeshTangent> Tangents;
 	TArray<FColor> VertexColors;
 
-	// Calculate water radius (sea level)
-	// Make slightly smaller than planet base + sea level to avoid z-fighting
-	float WaterRadius = PlanetRadius * (1.0f + SeaLevel) * 0.999f;
+	// Calculate water radius (sea level).
+	// Render 50 units below logical sea level to avoid z-fighting with coastal terrain,
+	// while keeping IsPointOnLand / ship / city logic at the unmodified SeaLevel value.
+	float WaterRadius = PlanetRadius * (1.0f + SeaLevel) + 10.0f;
 
 	// Define the 6 cube face directions (same as planet)
 	TArray<FVector> Directions = {
@@ -1068,21 +1096,8 @@ bool APlanetActor::IsPointOnLand(const FVector& SpherePoint) const
 	// Calculate height at this point
 	float Height = CalculateHeightAtPoint(SpherePoint);
 	
-	// Compare to sea level (with small threshold for safety)
-	// Height is relative to BaseHeight, so land is BaseHeight + SeedHeight
-	// Sea level is at BaseHeight + SeaLevel
-	float LandThreshold = BaseHeight + SeaLevel + 0.001f; // Small buffer above sea level
-	
-	bool bIsLand = Height > LandThreshold;
-	
-	// Log first few checks for debugging
-	static int32 CheckCount = 0;
-	if (CheckCount < 5)
-	{
-		UE_LOG(LogTemp, Log, TEXT("IsPointOnLand: Height=%.4f, Threshold=%.4f, Result=%s"),
-			Height, LandThreshold, bIsLand ? TEXT("LAND") : TEXT("OCEAN"));
-		CheckCount++;
-	}
+	// Land is any point whose terrain height is above sea level.
+	bool bIsLand = Height > BaseHeight + SeaLevel;
 	
 	return bIsLand;
 }
@@ -1158,8 +1173,8 @@ void APlanetActor::GenerateCoastalCandidates(int32 TargetContinentId, TArray<FVe
 	
 	const FVector ContinentCenter = ContinentSeeds[TargetContinentId].Position;
 	const float ContinentSize = ContinentSeeds[TargetContinentId].Size; // 0.8 - 1.2
-	const float InsetDistance = CityRadius; // 5000 units inland from coast
-	
+	const float InsetDistance = CityRadius - 2000; // walk inland by city radius from the coastline
+
 	// Estimate continent angular radius based on Voronoi cell distribution
 	// With N cells evenly distributed, each cell has approximate angular radius: sqrt(4π/N)
 	// However, continents don't fill entire cells (oceans between them), so use conservative multiplier
@@ -1223,7 +1238,7 @@ void APlanetActor::GenerateCoastalCandidates(int32 TargetContinentId, TArray<FVe
 		
 		FVector CoastPoint = FVector::ZeroVector;
 		bool bFoundCoast = false;
-		const float InwardAngularStep = 0.005f; // ~0.3 degrees per step
+		const float InwardAngularStep = 0.005f; // ~400 units per step
 		
 		for (float InwardDist = InwardAngularStep; InwardDist < SamplingAngularRadius; InwardDist += InwardAngularStep)
 		{
@@ -1232,24 +1247,14 @@ void APlanetActor::GenerateCoastalCandidates(int32 TargetContinentId, TArray<FVe
 			FVector TestPoint = InwardRotation.RotateVector(ContinentCenter);
 			TestPoint.Normalize();
 			
-			bool bOnLand = IsPointOnLand(TestPoint);
-			
-			if (bOnLand)
+			if (IsPointOnLand(TestPoint))
 			{
-				// Check if it's our target continent
-				int32 TestContinentId = GetContinentIdForPoint(TestPoint);
-				if (TestContinentId == TargetContinentId)
+				if (GetContinentIdForPoint(TestPoint) == TargetContinentId)
 				{
-					// Found the coastline!
 					CoastPoint = TestPoint;
 					bFoundCoast = true;
-					break;
 				}
-				else
-				{
-					// Hit a different continent - not a valid coast for us
-					break;
-				}
+				break; // Either found coast or hit wrong continent — stop scanning
 			}
 		}
 		
@@ -1276,11 +1281,11 @@ void APlanetActor::GenerateCoastalCandidates(int32 TargetContinentId, TArray<FVe
 			continue;
 		}
 		
-		// ===== STEP 4: Check that all points within 3000 units are land =====
+		// ===== STEP 4: Check no terrain within 3000 units is water =====
 		
 		bool bValidTerritory = true;
-		const int32 NumChecks = 8;
-		float TerritoryAngularRadius = 3000.0f / PlanetRadius; // Reduced from 4500 to generate more candidates
+		const int32 NumChecks = 12;
+		float TerritoryAngularRadius = 3000.0f / PlanetRadius;
 		
 		for (int32 Check = 0; Check < NumChecks; Check++)
 		{
@@ -1299,7 +1304,7 @@ void APlanetActor::GenerateCoastalCandidates(int32 TargetContinentId, TArray<FVe
 			FVector CheckPoint = CheckRotation.RotateVector(CandidatePoint);
 			CheckPoint.Normalize();
 			
-			if (GetContinentIdForPoint(CheckPoint) != TargetContinentId)
+			if (!IsPointOnLand(CheckPoint))
 			{
 				bValidTerritory = false;
 				break;
@@ -1350,36 +1355,61 @@ void APlanetActor::SpawnCities()
 	}
 	SpawnedCities.Empty();
 
-	// Find target continent (largest land mass or random if not placing on same continent)
-	int32 TargetContinentId = -1;
+	// Find the two largest continents:
+	//   Continent 1 (largest)  -> cities 0-9  (player + AI1-AI9)
+	//   Continent 2 (2nd largest) -> cities 10-19 (AI10-AI19)
+	int32 Continent1Id = -1;
+	int32 Continent2Id = -1;
 	if (bPlaceOnSameContinent)
 	{
-		// Find largest land continent by size
 		float LargestSize = 0.0f;
+		float SecondSize  = 0.0f;
 		for (int32 i = 0; i < ContinentSeeds.Num(); i++)
 		{
-			if (ContinentSeeds[i].bIsLand && ContinentSeeds[i].Size > LargestSize)
+			if (ContinentSeeds[i].bIsLand)
 			{
-				LargestSize = ContinentSeeds[i].Size;
-				TargetContinentId = i;
+				if (ContinentSeeds[i].Size > LargestSize)
+				{
+					SecondSize  = LargestSize;
+					Continent2Id = Continent1Id;
+					LargestSize = ContinentSeeds[i].Size;
+					Continent1Id = i;
+				}
+				else if (ContinentSeeds[i].Size > SecondSize)
+				{
+					SecondSize  = ContinentSeeds[i].Size;
+					Continent2Id = i;
+				}
 			}
 		}
 
-		if (TargetContinentId < 0)
+		if (Continent1Id < 0)
 		{
 			UE_LOG(LogTemp, Error, TEXT("SpawnCities: No land continents found!"));
 			return;
 		}
+		if (Continent2Id < 0)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SpawnCities: Only one continent found, using it for both halves"));
+			Continent2Id = Continent1Id;
+		}
 
-		UE_LOG(LogTemp, Log, TEXT("SpawnCities: Target continent %d (size %.2f) at position %s"),
-			TargetContinentId, ContinentSeeds[TargetContinentId].Size, *ContinentSeeds[TargetContinentId].Position.ToString());
+		UE_LOG(LogTemp, Log, TEXT("SpawnCities: Continent1=%d (size %.2f), Continent2=%d (size %.2f)"),
+			Continent1Id, ContinentSeeds[Continent1Id].Size,
+			Continent2Id, ContinentSeeds[Continent2Id].Size);
 	}
 
-	// Pre-generate coastal spawn candidates for coastal cities (first 6)
-	TArray<FVector> CoastalCandidates;
-	if (NumCitiesToSpawn > 0 && TargetContinentId >= 0)
+	// Pre-generate coastal spawn candidates for both continents
+	// Continent 1 serves cities 0-4 (player + AI1-AI4); Continent 2 serves cities 10-14 (AI10-AI14)
+	TArray<FVector> CoastalCandidates1;
+	TArray<FVector> CoastalCandidates2;
+	if (NumCitiesToSpawn > 0 && Continent1Id >= 0)
 	{
-		GenerateCoastalCandidates(TargetContinentId, CoastalCandidates);
+		GenerateCoastalCandidates(Continent1Id, CoastalCandidates1);
+	}
+	if (NumCitiesToSpawn > 0 && Continent2Id >= 0)
+	{
+		GenerateCoastalCandidates(Continent2Id, CoastalCandidates2);
 	}
 
 	// Track spawned locations for distance checking
@@ -1403,32 +1433,35 @@ void APlanetActor::SpawnCities()
 		for (int32 Attempt = 0; Attempt < MaxCitySpawnAttempts; Attempt++)
 		{
 			// Determine if this should be a coastal or landlocked city
-			// Cities 1-6 are coastal (6 cities), Cities 0, 7, 8 are landlocked (3 cities)
-			bool bRequireCoastal = (CityIndex >= 1 && CityIndex <= 6);
-			bool bRequireLandlocked = (CityIndex == 0 || CityIndex >= 7);
+			// Continent 1 (0-9):  coastal=0-4, landlocked=5-9
+			// Continent 2 (10-19): coastal=10-14, landlocked=15-19
+			bool bRequireCoastal    = (CityIndex <= 4) || (CityIndex >= 10 && CityIndex <= 14);
+			bool bRequireLandlocked = (CityIndex >= 5 && CityIndex <= 9) || CityIndex >= 15;
+			int32 CurrentContinentId = (CityIndex < 10) ? Continent1Id : Continent2Id;
+			TArray<FVector>& CurrentCoastalCandidates = (CityIndex < 10) ? CoastalCandidates1 : CoastalCandidates2;
 			int32 UsedCandidateIndex = -1; // Track which coastal candidate was used
 
 			// For coastal cities, use pre-generated candidates
 			if (bRequireCoastal)
 			{
 				// Regenerate if running low on candidates (likely all too close to existing cities)
-				if (CoastalCandidates.Num() < 3 && Attempt > 0)
+				if (CurrentCoastalCandidates.Num() < 3 && Attempt > 0)
 				{
 					UE_LOG(LogTemp, Warning, TEXT("SpawnCities: Regenerating coastal candidates (had %d left, attempt %d)"), 
-						CoastalCandidates.Num(), Attempt);
-					CoastalCandidates.Empty();
-					GenerateCoastalCandidates(TargetContinentId, CoastalCandidates);
+						CurrentCoastalCandidates.Num(), Attempt);
+					CurrentCoastalCandidates.Empty();
+					GenerateCoastalCandidates(CurrentContinentId, CurrentCoastalCandidates);
 				}
 				
-				if (CoastalCandidates.Num() == 0)
+				if (CurrentCoastalCandidates.Num() == 0)
 				{
 					UE_LOG(LogTemp, Error, TEXT("SpawnCities: No coastal candidates available for city %d"), CityIndex);
 					break; // Can't spawn this city
 				}
 				
 				// Pick random coastal candidate
-				UsedCandidateIndex = RNG2.RandRange(0, CoastalCandidates.Num() - 1);
-				SpawnDirection = CoastalCandidates[UsedCandidateIndex];
+				UsedCandidateIndex = RNG2.RandRange(0, CurrentCoastalCandidates.Num() - 1);
+				SpawnDirection = CurrentCoastalCandidates[UsedCandidateIndex];
 			}
 			else
 			{
@@ -1441,7 +1474,7 @@ void APlanetActor::SpawnCities()
 					float RandomDist = RNG2.FRandRange(0.0f, MaxAngularOffset);
 					
 					// Create perpendicular basis vectors at continent center
-					FVector ContinentDir = ContinentSeeds[TargetContinentId].Position;
+					FVector ContinentDir = ContinentSeeds[CurrentContinentId].Position;
 					FVector Tangent = FVector::CrossProduct(ContinentDir, FVector::UpVector).GetSafeNormal();
 					if (Tangent.IsNearlyZero())
 					{
@@ -1458,7 +1491,7 @@ void APlanetActor::SpawnCities()
 					
 					// Verify it's on target continent
 					int32 ContinentId = GetContinentIdForPoint(SpawnDirection);
-					if (ContinentId != TargetContinentId)
+					if (ContinentId != CurrentContinentId)
 					{
 						WrongContinentCount++;
 						continue;
@@ -1505,8 +1538,8 @@ void APlanetActor::SpawnCities()
 					FVector SampleDirection = (SpawnDirection * PlanetRadius + Offset).GetSafeNormal();
 					
 					bool bSampleOnLand = bPlaceOnSameContinent ? 
-						(GetContinentIdForPoint(SampleDirection) == TargetContinentId) :
-						IsPointOnLand(SampleDirection);
+					(GetContinentIdForPoint(SampleDirection) == CurrentContinentId) :
+					IsPointOnLand(SampleDirection);
 					
 					if (!bSampleOnLand)
 					{
@@ -1602,7 +1635,7 @@ void APlanetActor::SpawnCities()
 				// Remove this coastal candidate since it's too close to existing cities
 				if (bRequireCoastal && UsedCandidateIndex >= 0)
 				{
-					CoastalCandidates.RemoveAt(UsedCandidateIndex);
+					CurrentCoastalCandidates.RemoveAt(UsedCandidateIndex);
 				}
 				
 				continue;
@@ -1610,14 +1643,14 @@ void APlanetActor::SpawnCities()
 
 			// Success!
 			bValidLocationFound = true;
-			const TCHAR* CityType = (CityIndex >= 1 && CityIndex <= 6) ? TEXT("COASTAL") : TEXT("LANDLOCKED");
+			const TCHAR* CityType = bRequireCoastal ? TEXT("COASTAL") : TEXT("LANDLOCKED");
 			UE_LOG(LogTemp, Log, TEXT("SpawnCities: Found valid %s location for city %d on attempt %d (terrain radius=%.1f)"), 
 				CityType, CityIndex, Attempt + 1, ActualTerrainRadius);
 			
 			// Remove used coastal candidate to avoid reuse
-			if (CityIndex < 6 && UsedCandidateIndex >= 0)
+			if (bRequireCoastal && UsedCandidateIndex >= 0)
 			{
-				CoastalCandidates.RemoveAt(UsedCandidateIndex);
+				CurrentCoastalCandidates.RemoveAt(UsedCandidateIndex);
 			}
 			
 			break;
@@ -1633,20 +1666,31 @@ void APlanetActor::SpawnCities()
 			}
 			else
 			{
-				// Assign to AI teams (AI1-AI8)
-				// CityIndex 1 = AI1, 2 = AI2, etc.
-				int32 AIIndex = CityIndex; // 1-8
+				// Assign to AI teams (AI1-AI19)
+				// CityIndex 1=AI1, 2=AI2, ..., 19=AI19
+				int32 AIIndex = CityIndex; // 1-19
 				switch (AIIndex)
 				{
-					case 1: CityTeam = EOwnerTeam::AI1; break;
-					case 2: CityTeam = EOwnerTeam::AI2; break;
-					case 3: CityTeam = EOwnerTeam::AI3; break;
-					case 4: CityTeam = EOwnerTeam::AI4; break;
-					case 5: CityTeam = EOwnerTeam::AI5; break;
-					case 6: CityTeam = EOwnerTeam::AI6; break;
-					case 7: CityTeam = EOwnerTeam::AI7; break;
-					case 8: CityTeam = EOwnerTeam::AI8; break;
-					default: CityTeam = EOwnerTeam::AI1; break; // Fallback for more than 9 cities
+					case 1:  CityTeam = EOwnerTeam::AI1;  break;
+					case 2:  CityTeam = EOwnerTeam::AI2;  break;
+					case 3:  CityTeam = EOwnerTeam::AI3;  break;
+					case 4:  CityTeam = EOwnerTeam::AI4;  break;
+					case 5:  CityTeam = EOwnerTeam::AI5;  break;
+					case 6:  CityTeam = EOwnerTeam::AI6;  break;
+					case 7:  CityTeam = EOwnerTeam::AI7;  break;
+					case 8:  CityTeam = EOwnerTeam::AI8;  break;
+					case 9:  CityTeam = EOwnerTeam::AI9;  break;
+					case 10: CityTeam = EOwnerTeam::AI10; break;
+					case 11: CityTeam = EOwnerTeam::AI11; break;
+					case 12: CityTeam = EOwnerTeam::AI12; break;
+					case 13: CityTeam = EOwnerTeam::AI13; break;
+					case 14: CityTeam = EOwnerTeam::AI14; break;
+					case 15: CityTeam = EOwnerTeam::AI15; break;
+					case 16: CityTeam = EOwnerTeam::AI16; break;
+					case 17: CityTeam = EOwnerTeam::AI17; break;
+					case 18: CityTeam = EOwnerTeam::AI18; break;
+					case 19: CityTeam = EOwnerTeam::AI19; break;
+					default: CityTeam = EOwnerTeam::AI1;  break;
 				}
 			}
 
@@ -1662,6 +1706,8 @@ void APlanetActor::SpawnCities()
 				NewCity->PlanetRadius = ActualTerrainRadius; // Use actual terrain height, not base radius
 				NewCity->OwningPlanet = this;
 				NewCity->OwnerTeam = CityTeam;
+				NewCity->bIsCoastal = (CityIndex <= 4) || (CityIndex >= 10 && CityIndex <= 14); // Coastal: player+AI1-AI4 and AI10-AI14
+				NewCity->ContinentID = (CityIndex < 10) ? Continent1Id : Continent2Id;
 				NewCity->AlignToPlanet(); // This will now position at the correct terrain height
 				NewCity->UpdateColor();
 				
@@ -1773,7 +1819,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 	bool bSpawnNearCities = AllCities.Num() > 0;
 
 	int32 SuccessfulSpawns = 0;
-	float MinDistanceBetweenResources = 500.0f; // Minimum distance between resources
+	float MinDistanceBetweenResources = 600.0f; // Minimum distance between territory resources and between cluster resources (ensures 400u waypoint rings don't overlap)
 	float MinDistanceFromCities = 1500.0f; // Minimum distance from city center
 	float MaxDistanceFromCities = 5000.0f; // Maximum distance from city (matches territory radius)
 	int32 MaxAttemptsPerResource = 30; // Max tries to find a valid spot
@@ -2032,23 +2078,43 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 	// PHASE 2: Spawn resource clusters in the wild (groups of 2-5 resources, away from cities)
 	// Clusters spawn on the same continent as cities
 	
-	// Find the target continent (largest land continent)
-	int32 TargetContinentId = -1;
-	float LargestSize = 0.0f;
-	for (int32 i = 0; i < ContinentSeeds.Num(); i++)
+	// Find the two largest land continents for cluster spawning
+	int32 ClusterContinent1 = -1;
+	int32 ClusterContinent2 = -1;
 	{
-		if (ContinentSeeds[i].bIsLand && ContinentSeeds[i].Size > LargestSize)
+		float LargestSize = 0.0f;
+		float SecondSize  = 0.0f;
+		for (int32 i = 0; i < ContinentSeeds.Num(); i++)
 		{
-			LargestSize = ContinentSeeds[i].Size;
-			TargetContinentId = i;
+			if (ContinentSeeds[i].bIsLand)
+			{
+				if (ContinentSeeds[i].Size > LargestSize)
+				{
+					SecondSize    = LargestSize;
+					ClusterContinent2 = ClusterContinent1;
+					LargestSize   = ContinentSeeds[i].Size;
+					ClusterContinent1 = i;
+				}
+				else if (ContinentSeeds[i].Size > SecondSize)
+				{
+					SecondSize    = ContinentSeeds[i].Size;
+					ClusterContinent2 = i;
+				}
+			}
 		}
 	}
-	
-	if (TargetContinentId < 0)
+
+	if (ClusterContinent1 < 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("No land continent found for cluster spawning"));
 	}
 	else
+	{
+		TArray<int32> ClusterContinents = { ClusterContinent1 };
+		if (ClusterContinent2 >= 0 && ClusterContinent2 != ClusterContinent1)
+			ClusterContinents.Add(ClusterContinent2);
+
+	for (int32 TargetContinentId : ClusterContinents)
 	{
 		FVector ContinentCenter = ContinentSeeds[TargetContinentId].Position;
 		UE_LOG(LogTemp, Log, TEXT("Spawning clusters on continent %d (center: %s)"), TargetContinentId, *ContinentCenter.ToString());
@@ -2233,7 +2299,12 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 					if (ExistingResource)
 					{
 						float Distance = FVector::Dist(ResourceLocation, ExistingResource->GetActorLocation());
-						if (Distance < MinDistanceBetweenResources)
+						
+						// Territory resources (ClusterID == -1) need 800 unit minimum from cluster resources
+						// Cluster-to-cluster uses standard 600 unit minimum
+						float RequiredDistance = (ExistingResource->ClusterID == -1) ? 800.0f : MinDistanceBetweenResources;
+						
+						if (Distance < RequiredDistance)
 						{
 							bValidResourceLocationFound = false;
 							break;
@@ -2293,9 +2364,10 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 		}
 	}
 	
-	UE_LOG(LogTemp, Log, TEXT("Cluster spawning complete: %d clusters with resources spawned on continent %d"), 
-		ClustersSpawned, TargetContinentId);
-	}
+		UE_LOG(LogTemp, Log, TEXT("Cluster spawning complete: %d clusters with resources spawned on continent %d"), 
+			ClustersSpawned, TargetContinentId);
+	} // end per-continent cluster loop
+	} // end ClusterContinent1 valid check
 
 	UE_LOG(LogTemp, Log, TEXT("========== SpawnResourcesAroundPlanet COMPLETE: %d resources spawned =========="), 
 		SuccessfulSpawns);
@@ -2560,4 +2632,844 @@ float APlanetActor::SampleVolcanoHeight(float U, float V) const
 
 	// Convert 0-255 to 0-1 range
 	return HeightValue / 255.0f;
+}
+
+// ===== LINE-OF-SIGHT CHECK =====
+
+bool APlanetActor::HasClearLineOfSight(const FVector& StartPos, const FVector& EndPos) const
+{
+	// Convert to unit sphere directions
+	FVector PlanetLoc = GetActorLocation();
+	FVector StartDir = (StartPos - PlanetLoc).GetSafeNormal();
+	FVector EndDir = (EndPos - PlanetLoc).GetSafeNormal();
+	
+	// Check if path crosses water (sample 5 points along the arc)
+	const int32 NumSamples = 5;
+	for (int32 s = 1; s < NumSamples; s++)
+	{
+		float T = (float)s / NumSamples;
+		FVector MidDir = FMath::Lerp(StartDir, EndDir, T).GetSafeNormal();
+		if (!IsPointOnLand(MidDir))
+		{
+			return false; // Water blocks line-of-sight
+		}
+	}
+	
+	// Check if path passes through any city (800u avoidance radius)
+	const float CityAvoidanceRadius = 800.0f;
+	for (ACityActor* City : SpawnedCities)
+	{
+		if (!City) continue;
+		
+		// Calculate closest point on line segment to city center
+		FVector CityLoc = City->GetActorLocation();
+		FVector LineDir = EndPos - StartPos;
+		float LineLength = LineDir.Size();
+		if (LineLength < 1.0f) continue;
+		
+		LineDir /= LineLength; // Normalize
+		
+		// Project city onto line
+		float T = FVector::DotProduct(CityLoc - StartPos, LineDir);
+		T = FMath::Clamp(T, 0.0f, LineLength); // Clamp to segment
+		
+		FVector ClosestPoint = StartPos + LineDir * T;
+		float DistToCity = FVector::Dist(ClosestPoint, CityLoc);
+		
+		if (DistToCity < CityAvoidanceRadius)
+		{
+			return false; // City blocks line-of-sight
+		}
+	}
+	
+	// Check if path passes through any resource (400u avoidance radius)
+	const float ResourceAvoidanceRadius = 400.0f;
+	for (AResourceActor* Resource : SpawnedResources)
+	{
+		if (!Resource) continue;
+		
+		// Calculate closest point on line segment to resource center
+		FVector ResourceLoc = Resource->GetActorLocation();
+		FVector LineDir = EndPos - StartPos;
+		float LineLength = LineDir.Size();
+		if (LineLength < 1.0f) continue;
+		
+		LineDir /= LineLength; // Normalize
+		
+		// Project resource onto line
+		float T = FVector::DotProduct(ResourceLoc - StartPos, LineDir);
+		T = FMath::Clamp(T, 0.0f, LineLength); // Clamp to segment
+		
+		FVector ClosestPoint = StartPos + LineDir * T;
+		float DistToResource = FVector::Dist(ClosestPoint, ResourceLoc);
+		
+		if (DistToResource < ResourceAvoidanceRadius)
+		{
+			return false; // Resource blocks line-of-sight
+		}
+	}
+	
+	return true; // Clear path
+}
+
+// ===== ARC INTERSECTION HELPERS =====
+
+bool APlanetActor::DoArcsIntersect(const FVector& Arc1Start, const FVector& Arc1End, const FVector& Arc2Start, const FVector& Arc2End) const
+{
+	// Convert world positions to unit sphere directions
+	FVector PlanetLoc = GetActorLocation();
+	FVector A1 = (Arc1Start - PlanetLoc).GetSafeNormal();
+	FVector A2 = (Arc1End - PlanetLoc).GetSafeNormal();
+	FVector B1 = (Arc2Start - PlanetLoc).GetSafeNormal();
+	FVector B2 = (Arc2End - PlanetLoc).GetSafeNormal();
+	
+	// Two great-circle arcs intersect if they cross each other
+	// Use the spherical geometry property: arcs cross if the endpoints of one arc
+	// are on opposite sides of the great circle containing the other arc
+	
+	// Great circle normal for arc A (cross product of endpoints)
+	FVector NormalA = FVector::CrossProduct(A1, A2).GetSafeNormal();
+	
+	// Check if B's endpoints are on opposite sides of A's great circle
+	float DotB1 = FVector::DotProduct(B1, NormalA);
+	float DotB2 = FVector::DotProduct(B2, NormalA);
+	
+	// If same sign (or one is zero), B doesn't cross A's great circle
+	if (DotB1 * DotB2 > 0.0f)
+	{
+		return false;
+	}
+	
+	// Great circle normal for arc B
+	FVector NormalB = FVector::CrossProduct(B1, B2).GetSafeNormal();
+	
+	// Check if A's endpoints are on opposite sides of B's great circle
+	float DotA1 = FVector::DotProduct(A1, NormalB);
+	float DotA2 = FVector::DotProduct(A2, NormalB);
+	
+	// If same sign (or one is zero), A doesn't cross B's great circle
+	if (DotA1 * DotA2 > 0.0f)
+	{
+		return false;
+	}
+	
+	// Both arcs cross each other's great circles
+	return true;
+}
+
+float APlanetActor::AngularDistanceToArc(const FVector& Point, const FVector& ArcStart, const FVector& ArcEnd) const
+{
+	// Convert to unit sphere directions
+	FVector PlanetLoc = GetActorLocation();
+	FVector P = (Point - PlanetLoc).GetSafeNormal();
+	FVector A = (ArcStart - PlanetLoc).GetSafeNormal();
+	FVector B = (ArcEnd - PlanetLoc).GetSafeNormal();
+	
+	// Great circle normal for the arc
+	FVector ArcNormal = FVector::CrossProduct(A, B).GetSafeNormal();
+	
+	// Angular distance from point to great circle plane
+	// This is the minimum angular distance to the arc (or its extension)
+	float DotP = FVector::DotProduct(P, ArcNormal);
+	float AngularDist = FMath::Abs(FMath::Asin(FMath::Clamp(DotP, -1.0f, 1.0f)));
+	
+	return AngularDist;
+}
+
+// ===== NAVIGATION GRAPH GENERATION =====
+
+void APlanetActor::GenerateNavGraph()
+{
+	NavNodes.Empty();
+	LandmassCount = 0;
+
+	UE_LOG(LogTemp, Log, TEXT("========== GENERATING NAVIGATION GRAPH =========="));
+
+	const float MinWaypointSpacing = 200.0f; // Minimum distance between waypoints
+	const float CoastlineHeightTarget = 0.005f; // Exact coastline height (0.5% = 400 units on 80k planet)
+	const float CoastlineHeightTolerance = 0.0001f; // Tiny tolerance for floating point comparison
+	
+	// ===== PHASE 1: Generate coastline waypoints =====
+	
+	// Sample planet surface to find coastline points
+	// Use finer resolution than old system to catch coastline details
+	const int32 NumLatitudes = 120;   // 1.5-degree spacing
+	const int32 NumLongitudes = 240;  // 1.5-degree spacing at equator
+	
+	TArray<FVector> CandidateCoastlinePoints;
+	
+	for (int32 Lat = 0; Lat <= NumLatitudes; Lat++)
+	{
+		float Phi = PI * Lat / NumLatitudes; // 0 to PI (north pole to south pole)
+		float Z = FMath::Cos(Phi);
+		float RingRadius = FMath::Sin(Phi);
+		
+		// Fewer samples near poles where ring radius is small
+		int32 RingNodes = FMath::Max(4, FMath::RoundToInt(NumLongitudes * RingRadius));
+		
+		for (int32 Lon = 0; Lon < RingNodes; Lon++)
+		{
+			float Theta = 2.0f * PI * Lon / RingNodes;
+			
+			FVector Direction(
+				RingRadius * FMath::Cos(Theta),
+				RingRadius * FMath::Sin(Theta),
+				Z
+			);
+			Direction.Normalize();
+			
+			// Check if this point is at exact coastline height
+			float TerrainHeight = CalculateHeightAtPoint(Direction);
+			if (FMath::Abs(TerrainHeight - CoastlineHeightTarget) <= CoastlineHeightTolerance)
+			{
+				// This is a coastline point
+				FVector WorldPos = GetActorLocation() + Direction * PlanetRadius * (1.0f + TerrainHeight);
+				CandidateCoastlinePoints.Add(WorldPos);
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Phase 1a: Found %d candidate coastline points"), CandidateCoastlinePoints.Num());
+	
+	// Filter candidates to enforce minimum spacing
+	TArray<FVector> CoastlineWaypoints;
+	for (const FVector& Candidate : CandidateCoastlinePoints)
+	{
+		bool bTooClose = false;
+		for (const FVector& Existing : CoastlineWaypoints)
+		{
+			if (FVector::Dist(Candidate, Existing) < MinWaypointSpacing)
+			{
+				bTooClose = true;
+				break;
+			}
+		}
+		
+		if (!bTooClose)
+		{
+			CoastlineWaypoints.Add(Candidate);
+		}
+	}
+	
+	// Add coastline waypoints to NavNodes
+	for (const FVector& WaypointPos : CoastlineWaypoints)
+	{
+		FNavNode Node;
+		Node.WorldPosition = WaypointPos;
+		Node.Position = (WaypointPos - GetActorLocation()).GetSafeNormal();
+		Node.Index = NavNodes.Num();
+		Node.LandmassID = GetContinentIdForPoint(Node.Position); // Use Voronoi continent seed ID
+		Node.Owner = nullptr; // Static coastline waypoint
+		NavNodes.Add(Node);
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Phase 1b: Created %d coastline waypoints (%.0f unit spacing)"), 
+		CoastlineWaypoints.Num(), MinWaypointSpacing);
+	
+	// ===== PHASE 2: Generate volcano perimeter waypoints =====
+	
+	const float VolcanoClearance = 3500.0f; // Distance from volcano center
+	const int32 WaypointsPerVolcano = 12; // 12 waypoints = 30-degree spacing
+	
+	for (const FVector& VolcanoDir : VolcanoPositions)
+	{
+		// VolcanoDir is a unit sphere direction
+		// Create a ring of waypoints around the volcano at VolcanoClearance distance
+		
+		// Create two tangent vectors perpendicular to volcano direction
+		FVector Tangent1 = FVector::CrossProduct(VolcanoDir, FVector::UpVector).GetSafeNormal();
+		if (Tangent1.IsNearlyZero())
+		{
+			Tangent1 = FVector::CrossProduct(VolcanoDir, FVector::RightVector).GetSafeNormal();
+		}
+		FVector Tangent2 = FVector::CrossProduct(VolcanoDir, Tangent1).GetSafeNormal();
+		
+		// Place waypoints in a circle around volcano
+		for (int32 i = 0; i < WaypointsPerVolcano; i++)
+		{
+			float Angle = (2.0f * PI * i) / WaypointsPerVolcano;
+			
+			// Offset direction on sphere surface
+			FVector OffsetDir = Tangent1 * FMath::Cos(Angle) + Tangent2 * FMath::Sin(Angle);
+			
+			// Calculate the direction that's VolcanoClearance units away on sphere surface
+			// Angular distance: Angle = Distance / Radius
+			float AngularDistance = VolcanoClearance / PlanetRadius;
+			
+			// Rotate VolcanoDir toward OffsetDir by AngularDistance
+			FVector WaypointDir = FMath::Lerp(VolcanoDir, OffsetDir, FMath::Sin(AngularDistance)).GetSafeNormal();
+			
+			// Get terrain height at waypoint location
+			float TerrainHeight = CalculateHeightAtPoint(WaypointDir);
+			float TerrainRadius = PlanetRadius * (1.0f + TerrainHeight);
+			FVector WaypointPos = GetActorLocation() + WaypointDir * TerrainRadius;
+			
+			// Only add if on land
+			if (IsPointOnLand(WaypointDir))
+			{
+				FNavNode Node;
+				Node.WorldPosition = WaypointPos;
+				Node.Position = WaypointDir;
+				Node.Index = NavNodes.Num();
+				Node.LandmassID = GetContinentIdForPoint(WaypointDir); // Use Voronoi continent seed ID
+				Node.Owner = nullptr; // Static volcano waypoint
+				NavNodes.Add(Node);
+			}
+		}
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("Phase 2: Created volcano waypoints around %d volcanoes"), VolcanoPositions.Num());
+	
+	// ===== PHASE 3: Generate edges and flood fill landmasses =====
+	
+	RegenerateNavigationEdges();
+	
+	UE_LOG(LogTemp, Log, TEXT("========== NAV GRAPH GENERATION COMPLETE: %d nodes =========="), NavNodes.Num());
+}
+
+// ===== DYNAMIC WAYPOINT REGISTRATION =====
+
+int32 APlanetActor::RegisterNavigationWaypoint(FVector WorldPosition, AActor* OwnerActor)
+{
+	FNavNode NewNode;
+	NewNode.WorldPosition = WorldPosition;
+	NewNode.Position = (WorldPosition - GetActorLocation()).GetSafeNormal();
+	NewNode.Index = NavNodes.Num();
+	NewNode.LandmassID = GetContinentIdForPoint(NewNode.Position); // Use Voronoi continent seed ID
+	NewNode.Owner = OwnerActor;
+	
+	NavNodes.Add(NewNode);
+	
+	// Don't regenerate edges immediately - let caller batch multiple waypoints then call RegenerateNavigationEdges()
+	
+	return NewNode.Index;
+}
+
+void APlanetActor::UnregisterNavigationWaypoint(int32 WaypointIndex, AActor* OwnerActor)
+{
+	if (WaypointIndex < 0 || WaypointIndex >= NavNodes.Num())
+	{
+		//UE_LOG(LogTemp, Warning, TEXT("UnregisterNavigationWaypoint: Invalid index %d"), WaypointIndex);
+		return;
+	}
+	
+	// Verify owner matches (security check)
+	if (OwnerActor && NavNodes[WaypointIndex].Owner != OwnerActor)
+	{
+		//UE_LOG(LogTemp, Warning, TEXT("UnregisterNavigationWaypoint: Owner mismatch for waypoint %d"), WaypointIndex);
+		return;
+	}
+	
+	// Remove the waypoint
+	NavNodes.RemoveAt(WaypointIndex);
+	
+	// Update all node indices
+	for (int32 i = 0; i < NavNodes.Num(); i++)
+	{
+		NavNodes[i].Index = i;
+	}
+	
+	// Regenerate edges to reflect new connectivity
+	RegenerateNavigationEdges();
+}
+
+void APlanetActor::RegenerateNavigationEdges()
+{
+	// Clear all existing edges
+	for (FNavNode& Node : NavNodes)
+	{
+		Node.Neighbors.Empty();
+	}
+	
+	// Rebuild edges (same logic as GenerateNavGraph Phase 2)
+	const float MaxEdgeAngle = FMath::DegreesToRadians(5.0f); // Connect nodes within 5 degrees
+	const float CityAvoidanceRadius = 800.0f; // Avoid edges passing through cities
+	const float ResourceAvoidanceRadius = 400.0f; // Avoid edges passing through resources
+	
+	int32 TotalEdges = 0;
+	for (int32 i = 0; i < NavNodes.Num(); i++)
+	{
+		for (int32 j = i + 1; j < NavNodes.Num(); j++)
+		{
+			// Check angular distance
+			float Angle = FMath::Acos(FMath::Clamp(
+				FVector::DotProduct(NavNodes[i].Position, NavNodes[j].Position), -1.0f, 1.0f));
+			
+			if (Angle > MaxEdgeAngle) continue;
+			
+			// Verify the path between nodes doesn't cross water
+			bool bPathClear = true;
+			const int32 NumSamples = 3;
+			for (int32 s = 1; s < NumSamples; s++)
+			{
+				float T = (float)s / NumSamples;
+				FVector MidPoint = FMath::Lerp(NavNodes[i].Position, NavNodes[j].Position, T).GetSafeNormal();
+				if (!IsPointOnLand(MidPoint))
+				{
+					bPathClear = false;
+					break;
+				}
+			}
+			
+			if (!bPathClear) continue;
+			
+			// Check if edge passes through any city
+			for (ACityActor* City : SpawnedCities)
+			{
+				if (!City) continue;
+				
+				FVector EdgeMidPoint = FMath::Lerp(NavNodes[i].WorldPosition, NavNodes[j].WorldPosition, 0.5f);
+				float DistToCity = FVector::Dist(EdgeMidPoint, City->GetActorLocation());
+				if (DistToCity < CityAvoidanceRadius)
+				{
+					bPathClear = false;
+					break;
+				}
+			}
+			
+			if (!bPathClear) continue;
+			
+			// Check if edge passes through any resource
+			for (AResourceActor* Resource : SpawnedResources)
+			{
+				if (!Resource) continue;
+				
+				FVector EdgeMidPoint = FMath::Lerp(NavNodes[i].WorldPosition, NavNodes[j].WorldPosition, 0.5f);
+				float DistToResource = FVector::Dist(EdgeMidPoint, Resource->GetActorLocation());
+				if (DistToResource < ResourceAvoidanceRadius)
+				{
+					bPathClear = false;
+					break;
+				}
+			}
+			
+			if (bPathClear)
+			{
+				float Distance = Angle * PlanetRadius; // Arc length
+				NavNodes[i].Neighbors.Add(FNavEdge(j, Distance));
+				NavNodes[j].Neighbors.Add(FNavEdge(i, Distance));
+				TotalEdges++;
+			}
+		}
+	}
+	
+	// Landmass IDs are now assigned using Voronoi continent seeds during node creation
+	// Count unique landmass IDs for logging
+	TSet<int32> UniqueLandmasses;
+	for (const FNavNode& Node : NavNodes)
+	{
+		if (Node.LandmassID >= 0)
+		{
+			UniqueLandmasses.Add(Node.LandmassID);
+		}
+	}
+	LandmassCount = UniqueLandmasses.Num();
+	
+	UE_LOG(LogTemp, Log, TEXT("RegenerateNavigationEdges: %d nodes, %d edges, %d continents"), 
+		NavNodes.Num(), TotalEdges, LandmassCount);
+}
+
+// ===== DEBUG VISUALIZATION =====
+
+void APlanetActor::DebugDrawAllNavNodes()
+{
+	if (!GetWorld()) return;
+	
+	// Draw all nav nodes as RED boxes
+	for (const FNavNode& Node : NavNodes)
+	{
+		DrawDebugBox(GetWorld(), Node.WorldPosition, FVector(50.0f), FColor::Red, false, 0.1f, 0, 5.0f);
+	}
+}
+
+// ===== PATHFINDING (A* ALGORITHM) =====
+
+bool APlanetActor::FindPath(FVector StartWorldPos, FVector EndWorldPos, TArray<FVector>& OutPath, bool bDebugLog, FString* OutFailureReason)
+{
+	OutPath.Empty();
+
+	// ===== TARGET VALIDATION =====
+	// Check if target is in water
+	FVector TargetDir = (EndWorldPos - GetActorLocation()).GetSafeNormal();
+	if (!IsPointOnLand(TargetDir))
+	{
+		if (bDebugLog)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("FindPath FAILED: Target is in water"));
+		}
+		if (OutFailureReason)
+		{
+			*OutFailureReason = TEXT("Target is in water");
+		}
+		return false;
+	}
+
+	// Check if target is too close to any city
+	const float CityExclusionRadius = 800.0f;
+	for (ACityActor* City : SpawnedCities)
+	{
+		if (!City) continue;
+		float DistToCity = FVector::Dist(EndWorldPos, City->GetActorLocation());
+		if (DistToCity < CityExclusionRadius)
+		{
+			//UE_LOG(LogTemp, Warning, TEXT("FindPath FAILED: Target too close to city (%s)"), *City->GetName());
+			if (OutFailureReason)
+			{
+				*OutFailureReason = FString::Printf(TEXT("Too close to city %s (%.0f < 800 units)"), *City->GetName(), DistToCity);
+			}
+			return false;
+		}
+	}
+	
+	// ===== STEP 1: CHECK SAME CONTINENT =====
+	FVector StartDir = (StartWorldPos - GetActorLocation()).GetSafeNormal();
+	FVector EndDir = (EndWorldPos - GetActorLocation()).GetSafeNormal();
+
+	// Use GetContinentIdForPoint directly on directions - this is authoritative and avoids
+	// false -1 results from nav nodes placed on land/water boundaries
+	int32 StartContinent = GetContinentIdForPoint(StartDir);
+	int32 EndContinent = GetContinentIdForPoint(EndDir);
+	
+	// Find nearest nav nodes for pathfinding
+	int32 StartNode = FindNearestNavNode(StartWorldPos);
+	int32 EndNode = FindNearestNavNode(EndWorldPos);
+
+	if (StartNode < 0 || EndNode < 0)
+	{
+		if (bDebugLog)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("FindPath FAILED: Could not find nav nodes"));
+		}
+		if (OutFailureReason)
+		{
+			*OutFailureReason = TEXT("Could not find navigation nodes");
+		}
+		return false;
+	}
+
+	// Check same continent using authoritative continent IDs (not nav node LandmassIDs which can be -1 on borders)
+	// Only block if BOTH have valid continent IDs and they differ
+	if (StartContinent >= 0 && EndContinent >= 0 && StartContinent != EndContinent)
+	{
+		if (bDebugLog)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("FindPath FAILED: Different continents (%d vs %d)"),
+				StartContinent, EndContinent);
+		}
+		if (OutFailureReason)
+		{
+			*OutFailureReason = FString::Printf(TEXT("Different landmasses (%d vs %d)"), 
+				StartContinent, EndContinent);
+		}
+		return false;
+	}
+	
+	// ===== STEP 2: IDENTIFY DESTINATION OWNER =====
+	// Find which actor (if any) owns the destination point
+	// This allows pathfinding to not avoid the destination actor's waypoints
+	AActor* DestinationOwner = nullptr;
+	float ClosestDistToDestination = 1000.0f; // Only consider actors within 1000 units
+	
+	for (ACityActor* City : SpawnedCities)
+	{
+		if (City && FVector::Dist(City->GetActorLocation(), EndWorldPos) < ClosestDistToDestination)
+		{
+			ClosestDistToDestination = FVector::Dist(City->GetActorLocation(), EndWorldPos);
+			DestinationOwner = City;
+		}
+	}
+	for (AResourceActor* Resource : SpawnedResources)
+	{
+		if (Resource && FVector::Dist(Resource->GetActorLocation(), EndWorldPos) < ClosestDistToDestination)
+		{
+			ClosestDistToDestination = FVector::Dist(Resource->GetActorLocation(), EndWorldPos);
+			DestinationOwner = Resource;
+		}
+	}
+	
+	// ===== STEP 3: BUILD OBSTACLE PERIMETER MAP =====
+	// Group waypoints by owner and store them in order (for perimeter traversal)
+	TMap<AActor*, TArray<int32>> ObstacleWaypoints;
+	
+	for (int32 i = 0; i < NavNodes.Num(); i++)
+	{
+		if (NavNodes[i].Owner != nullptr)
+		{
+			ObstacleWaypoints.FindOrAdd(NavNodes[i].Owner).Add(i);
+		}
+	}
+	
+	// ===== STEP 4: LINE-OF-SIGHT PATHFINDING WITH OBSTACLE ROUTING =====
+	
+	FVector CurrentPos = StartWorldPos;
+	FVector TargetPos = EndWorldPos;
+	const int32 MaxIterations = 50; // Prevent infinite loops
+	int32 Iteration = 0;
+	
+	OutPath.Add(CurrentPos);
+	
+	while (FVector::Dist(CurrentPos, TargetPos) > 50.0f && Iteration < MaxIterations)
+	{
+		Iteration++;
+		
+		// Check if there's clear line-of-sight to target
+		bool bPathBlocked = false;
+		AActor* BlockingObstacle = nullptr;
+		int32 BlockingEdgeStart = -1;
+		int32 BlockingEdgeEnd = -1;
+		
+		// Check each obstacle's perimeter edges for intersection with current→target arc
+		for (const auto& Pair : ObstacleWaypoints)
+		{
+			AActor* ObstacleOwner = Pair.Key;
+			const TArray<int32>& Waypoints = Pair.Value;
+			
+			// Skip the destination owner - we're TRYING to reach it, not avoid it
+			if (ObstacleOwner == DestinationOwner)
+			{
+				continue;
+			}
+			
+			// Need at least 2 waypoints to form edges
+			if (Waypoints.Num() < 2) continue;
+			
+			// Quick rejection: check if obstacle is far from the path
+			FVector ObstacleCenter = ObstacleOwner->GetActorLocation();
+			float ObstacleRadius = 0.0f;
+			if (Cast<AResourceActor>(ObstacleOwner))
+			{
+				ObstacleRadius = 400.0f / PlanetRadius; // Angular radius
+			}
+			else if (Cast<ACityActor>(ObstacleOwner))
+			{
+				ObstacleRadius = 1600.0f / PlanetRadius; // Angular radius
+			}
+			
+			float DistToArc = AngularDistanceToArc(ObstacleCenter, CurrentPos, TargetPos);
+			if (DistToArc > ObstacleRadius * 1.5f)
+			{
+				continue; // Obstacle too far from path
+			}
+			
+			// Check each consecutive edge on the perimeter
+			// First, check if CurrentPos is at one of this obstacle's waypoints
+			int32 CurrentPosWaypointIndex = -1;
+			for (int32 i = 0; i < Waypoints.Num(); i++)
+			{
+				if (FVector::Dist(CurrentPos, NavNodes[Waypoints[i]].WorldPosition) < 50.0f)
+				{
+					CurrentPosWaypointIndex = i;
+					break;
+				}
+			}
+			
+			for (int32 i = 0; i < Waypoints.Num(); i++)
+			{
+				int32 NextIndex = (i + 1) % Waypoints.Num(); // Wrap around for closed perimeter
+				
+				// Skip edges adjacent to our starting position to avoid false positives
+				if (CurrentPosWaypointIndex >= 0)
+				{
+					if (i == CurrentPosWaypointIndex || NextIndex == CurrentPosWaypointIndex)
+					{
+						continue; // Skip edges connected to our current position
+					}
+				}
+				
+				FVector EdgeStart = NavNodes[Waypoints[i]].WorldPosition;
+				FVector EdgeEnd = NavNodes[Waypoints[NextIndex]].WorldPosition;
+				
+				// Check if current→target arc intersects this edge
+				if (DoArcsIntersect(CurrentPos, TargetPos, EdgeStart, EdgeEnd))
+				{
+					bPathBlocked = true;
+					BlockingObstacle = ObstacleOwner;
+					BlockingEdgeStart = Waypoints[i];
+					BlockingEdgeEnd = Waypoints[NextIndex];
+					break;
+				}
+			}
+			
+			if (bPathBlocked) break; // Found blocking obstacle
+		}
+		
+		if (!bPathBlocked)
+		{
+			// Clear path to target - we're done!
+			OutPath.Add(TargetPos);
+			break;
+		}
+		
+		// ===== STEP 4: ROUTE AROUND BLOCKING OBSTACLE =====
+		
+		if (bDebugLog)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[PATHFINDING] Path blocked by %s (edge %d→%d)"),
+				*BlockingObstacle->GetName(), BlockingEdgeStart, BlockingEdgeEnd);
+		}
+		
+		// Find the waypoint on the obstacle that is closest to the VEHICLE'S CURRENT POSITION
+		const TArray<int32>& ObstaclePerimeter = ObstacleWaypoints[BlockingObstacle];
+		int32 EntryWaypoint = ObstaclePerimeter[0];
+		float MinDist = FVector::Dist(NavNodes[EntryWaypoint].WorldPosition, CurrentPos);
+		
+		for (int32 WaypointIndex : ObstaclePerimeter)
+		{
+			float Dist = FVector::Dist(NavNodes[WaypointIndex].WorldPosition, CurrentPos);
+			if (Dist < MinDist)
+			{
+				MinDist = Dist;
+				EntryWaypoint = WaypointIndex;
+			}
+		}
+		
+		CurrentPos = NavNodes[EntryWaypoint].WorldPosition;
+		OutPath.Add(CurrentPos);
+		
+		if (bDebugLog)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[PATHFINDING] Entering obstacle at waypoint %d"), EntryWaypoint);
+		}
+		
+		// ===== STEP 5: WALK PERIMETER TOWARD DESTINATION =====
+		
+		// ObstaclePerimeter already retrieved in STEP 4
+		int32 CurrentWaypointIndex = ObstaclePerimeter.IndexOfByKey(EntryWaypoint);
+		
+		// Determine which direction to walk (pick ONCE and stick with it)
+		int32 NextIndex = (CurrentWaypointIndex + 1) % ObstaclePerimeter.Num();
+		int32 PrevIndex = (CurrentWaypointIndex - 1 + ObstaclePerimeter.Num()) % ObstaclePerimeter.Num();
+		
+		FVector NextPos = NavNodes[ObstaclePerimeter[NextIndex]].WorldPosition;
+		FVector PrevPos = NavNodes[ObstaclePerimeter[PrevIndex]].WorldPosition;
+		
+		float DistNext = FVector::Dist(NextPos, TargetPos);
+		float DistPrev = FVector::Dist(PrevPos, TargetPos);
+		
+		int32 WalkDirection = (DistNext < DistPrev) ? 1 : -1; // +1 = forward, -1 = backward
+		
+		const int32 MaxPerimeterSteps = ObstaclePerimeter.Num(); // One full loop maximum
+		for (int32 Step = 0; Step < MaxPerimeterSteps; Step++)
+		{
+			// Move to next waypoint in chosen direction
+			CurrentWaypointIndex = (CurrentWaypointIndex + WalkDirection + ObstaclePerimeter.Num()) % ObstaclePerimeter.Num();
+			CurrentPos = NavNodes[ObstaclePerimeter[CurrentWaypointIndex]].WorldPosition;
+			
+			OutPath.Add(CurrentPos);
+			
+			// Check if we can now see the target (check ALL obstacles, not just current one)
+			bool bStillBlocked = false;
+			
+			for (const auto& CheckPair : ObstacleWaypoints)
+			{
+				AActor* CheckObstacle = CheckPair.Key;
+				const TArray<int32>& CheckWaypoints = CheckPair.Value;
+				
+				// Skip the destination owner - we're TRYING to reach it
+				if (CheckObstacle == DestinationOwner)
+				{
+					continue;
+				}
+				
+				// Check if this obstacle blocks the path from current position to target
+				for (int32 i = 0; i < CheckWaypoints.Num(); i++)
+				{
+					int32 Next = (i + 1) % CheckWaypoints.Num();
+					FVector EdgeStart = NavNodes[CheckWaypoints[i]].WorldPosition;
+					FVector EdgeEnd = NavNodes[CheckWaypoints[Next]].WorldPosition;
+					
+					if (DoArcsIntersect(CurrentPos, TargetPos, EdgeStart, EdgeEnd))
+					{
+						bStillBlocked = true;
+						break;
+					}
+				}
+				
+				if (bStillBlocked) break; // Found blocking obstacle, no need to check others
+			}
+			
+			if (!bStillBlocked)
+			{
+				if (bDebugLog)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("[PATHFINDING] Cleared all obstacles at waypoint %d (step %d)"),
+						ObstaclePerimeter[CurrentWaypointIndex], Step + 1);
+				}
+				break; // Exited the obstacle, continue outer loop
+			}
+		}
+		
+		// SAFETY CHECK: If we walked the entire perimeter without finding clear line-of-sight,
+		// we're stuck (target is surrounded or unreachable from this angle)
+		// Prevent infinite loop by checking if we made progress
+		float DistanceAfterWalk = FVector::Dist(CurrentPos, TargetPos);
+		float DistanceBeforeWalk = FVector::Dist(NavNodes[EntryWaypoint].WorldPosition, TargetPos);
+		
+		if (DistanceAfterWalk >= DistanceBeforeWalk * 0.95f) // Less than 5% progress
+		{
+			if (bDebugLog)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[PATHFINDING] Stuck after walking perimeter - no progress made"));
+			}
+			// Give up on this path - return what we have so far or fail
+			break;
+		}
+	}
+	
+	// Draw debug visualization
+	if (bDebugDrawNavWaypoints)
+	{
+		for (const FVector& Waypoint : OutPath)
+		{
+			DrawDebugSphere(GetWorld(), Waypoint, 80.0f, 8, FColor::Yellow, false, 10.0f);
+		}
+	}
+	
+	if (bDebugLog)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[PATHFINDING] Path complete: %d waypoints"), OutPath.Num());
+	}
+	
+	return OutPath.Num() > 0;
+}
+
+float APlanetActor::HeuristicDistance(int32 NodeA, int32 NodeB) const
+{
+	if (NodeA < 0 || NodeA >= NavNodes.Num() || NodeB < 0 || NodeB >= NavNodes.Num())
+		return FLT_MAX;
+
+	float Dot = FVector::DotProduct(NavNodes[NodeA].Position, NavNodes[NodeB].Position);
+	return FMath::Acos(FMath::Clamp(Dot, -1.0f, 1.0f)) * PlanetRadius;
+}
+
+int32 APlanetActor::FindNearestNavNode(FVector WorldPos) const
+{
+	FVector Direction = (WorldPos - GetActorLocation()).GetSafeNormal();
+
+	// Build list of candidate nodes sorted by angular distance
+	TArray<TPair<int32, float>> Candidates;
+	for (int32 i = 0; i < NavNodes.Num(); i++)
+	{
+		float Dot = FVector::DotProduct(Direction, NavNodes[i].Position);
+		Candidates.Add(TPair<int32, float>(i, Dot));
+	}
+	
+	// Sort by dot product (higher = closer)
+	Candidates.Sort([](const TPair<int32, float>& A, const TPair<int32, float>& B) {
+		return A.Value > B.Value;
+	});
+	
+	// Try to find the nearest node with clear line-of-sight
+	int32 MaxCandidates = FMath::Min(10, Candidates.Num());
+	for (int32 i = 0; i < MaxCandidates; i++)
+	{
+		int32 NodeIndex = Candidates[i].Key;
+		if (HasClearLineOfSight(WorldPos, NavNodes[NodeIndex].WorldPosition))
+		{
+			return NodeIndex;
+		}
+	}
+	
+	// No LOS - return closest node (pathfinding will route around obstacles)
+	return Candidates.Num() > 0 ? Candidates[0].Key : -1;
 }

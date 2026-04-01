@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "PlanetCameraPawn.h"
 #include "PlanetActor.h"
@@ -347,14 +347,15 @@ void APlanetCameraPawn::Tick(float DeltaTime)
 	// Apply rotation to appropriate camera system
 	if (bCityEditorMode)
 	{
-		// Reset pawn rotation in city mode so relative locations work correctly
-		SetActorRotation(FRotator::ZeroRotator);
+		// Orient pawn so local Z = city surface normal; yaw then orbits around that axis
+		FVector CityNormal = (CityCenter - PlanetCenter).GetSafeNormal();
+		SetActorRotation(FRotationMatrix::MakeFromZ(CityNormal).ToQuat());
 		
 		if (CityCameraArm)
 		{
-			// Position arm at city and rotate it to orbit the city
-			FVector RelativeCityLocation = CityCenter - PlanetCenter;
-			CityCameraArm->SetRelativeLocation(RelativeCityLocation);
+			// Arm pivot in pawn local space: city is directly along local Z at CityDist
+			float CityDist = FVector::Dist(CityCenter, PlanetCenter);
+			CityCameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, CityDist));
 			CityCameraArm->SetRelativeRotation(FRotator(CityCameraPitch, CityCameraYaw, 0.0f));
 		}
 	}
@@ -431,7 +432,7 @@ void APlanetCameraPawn::Tick(float DeltaTime)
 					float DistanceRange = MaxOrbitDistance - MinOrbitDistance;
 					float DistanceRatio = (CurrentOrbitDistance - MinOrbitDistance) / DistanceRange;
 					// Scale sensitivity: 10% when zoomed in, 100% when zoomed out
-					float ScaledPanSensitivity = MousePanSensitivity * (0.2f + (DistanceRatio * 0.8f));
+					float ScaledPanSensitivity = MousePanSensitivity * (0.001f + (DistanceRatio * 0.999f));
 					
 					// Get the active camera
 					UCameraComponent* ActiveCamera = bCityEditorMode ? CityCamera : PlanetCamera;
@@ -593,7 +594,7 @@ void APlanetCameraPawn::StartMiddleMouseControl(const FInputActionValue& Value)
 		float MouseX, MouseY;
 		PC->GetMousePosition(MouseX, MouseY);
 		LastMiddleMousePosition = FVector2D(MouseX, MouseY);
-		UE_LOG(LogTemp, Log, TEXT("Initial mouse position: X=%f, Y=%f"), MouseX, MouseY);
+		//UE_LOG(LogTemp, Log, TEXT("Initial mouse position: X=%f, Y=%f"), MouseX, MouseY);
 	}
 }
 
@@ -632,10 +633,10 @@ void APlanetCameraPawn::HandleMiddleMouseControl(float DeltaTime)
 		return;
 	}
 	
-	if (MouseDelta.Size() > 0.1f)
+	// Ignore tiny movements (deadzone)
+	if (MouseDelta.Size() < 0.1f)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Mouse Delta: X=%f, Y=%f, Size=%f | Tilt=%f, Rotation=%f"), 
-			MouseDelta.X, MouseDelta.Y, MouseDelta.Size(), CurrentCameraTilt, CurrentCameraRotation);
+		return;
 	}
 	
 	// Apply horizontal movement to camera rotation (spin to look at different horizons)
@@ -695,9 +696,9 @@ void APlanetCameraPawn::HandleMiddleMouseControl(float DeltaTime)
 		
 		// Debug: verify it was applied
 		FRotator ActualRotation = ActiveCamera->GetRelativeRotation();
-		UE_LOG(LogTemp, Log, TEXT("Camera tilt update - Mode: %s, Tilt: %.1f, Roll: %.1f, Actual: %s"), 
-			bCityEditorMode ? TEXT("CITY") : TEXT("PLANET"), 
-			CameraTilt, CameraRoll, *ActualRotation.ToString());
+		//UE_LOG(LogTemp, Log, TEXT("Camera tilt update - Mode: %s, Tilt: %.1f, Roll: %.1f, Actual: %s"), 
+		//	bCityEditorMode ? TEXT("CITY") : TEXT("PLANET"), 
+		//	CameraTilt, CameraRoll, *ActualRotation.ToString());
 	}
 	
 	LastMiddleMousePosition = CurrentMousePosition;
@@ -771,8 +772,10 @@ void APlanetCameraPawn::EnterCityEditorMode(FVector InCityCenter)
 	bCityEditorMode = true;
 	CityCenter = InCityCenter;
 	
-	// Reset pawn rotation so relative positioning works correctly
-	SetActorRotation(FRotator::ZeroRotator);
+	// Orient pawn so its local Z points from planet center through the city.
+	// This makes CityCameraYaw rotate around the city's surface normal instead of world Z.
+	FVector CityNormal = (CityCenter - PlanetCenter).GetSafeNormal();
+	SetActorRotation(FRotationMatrix::MakeFromZ(CityNormal).ToQuat());
 	
 	// Restore saved city camera state if available, otherwise use defaults
 	if (bHasSavedCityState)
@@ -783,7 +786,9 @@ void APlanetCameraPawn::EnterCityEditorMode(FVector InCityCenter)
 			// Disable lag so arm snaps instantly
 			CityCameraArm->bEnableCameraLag = false;
 			
-			CityCameraArm->SetRelativeLocation(SavedCityCameraArmLocation);
+			// Arm pivot: city is directly along local Z (CityNormal) from the pawn at PlanetCenter
+			float CityDist = FVector::Dist(CityCenter, PlanetCenter);
+			CityCameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, CityDist));
 			CityCameraArm->SetRelativeRotation(SavedCityCameraArmRotation);
 			CityCameraArm->TargetArmLength = SavedCityCameraArmLength;
 			
@@ -801,17 +806,26 @@ void APlanetCameraPawn::EnterCityEditorMode(FVector InCityCenter)
 	else
 	{
 		// First time entering city mode - calculate initial orientation
-		// Calculate direction from planet center to city
+		// DirectionFromPlanet is the city's surface normal (local Z of the pawn after orientation fix)
 		FVector DirectionFromPlanet = (CityCenter - PlanetCenter).GetSafeNormal();
-		FVector DirectionTowardPlanet = -DirectionFromPlanet;
-		FRotator TowardPlanetRotation = DirectionTowardPlanet.Rotation();
 		
-		// Get current viewing yaw from planet camera for consistent orientation
-		float CurrentViewingYaw = PlanetCamera ? PlanetCamera->GetComponentRotation().Yaw : 0.0f;
+		// Set initial city camera parameters.
+		// Since the pawn is now oriented with local Z = CityNormal, the pitch is simply
+		// a fixed elevation angle in city-local space (no world-space correction needed).
+		CityCameraPitch = -40.0f;  // 40° above local horizontal = comfortable overhead view
 		
-		// Set initial city camera parameters
-		CityCameraPitch = TowardPlanetRotation.Pitch + 50.0f;
-		CityCameraYaw = CurrentViewingYaw;
+		// Derive initial yaw: project the planet camera's forward direction onto the city
+		// horizontal plane so the orbit starts facing the same general direction as before.
+		FVector PlanetCamForward = PlanetCamera ? PlanetCamera->GetForwardVector() : FVector::ForwardVector;
+		FVector CityNormalForYaw = DirectionFromPlanet; // local Z of pawn
+		FVector FlatForward = (PlanetCamForward - CityNormalForYaw * FVector::DotProduct(PlanetCamForward, CityNormalForYaw)).GetSafeNormal();
+		// Project FlatForward into pawn's local XY plane to get a yaw angle
+		// Use the pawn's new local X axis to derive yaw
+		{
+			FQuat PawnQuat = FRotationMatrix::MakeFromZ(CityNormalForYaw).ToQuat();
+			FVector LocalFlat = PawnQuat.UnrotateVector(FlatForward);
+			CityCameraYaw = FMath::RadiansToDegrees(FMath::Atan2(LocalFlat.Y, LocalFlat.X));
+		}
 		CityCameraOrbitDistance = CityEditorStartDistance;
 		CityCameraTilt = 185.0f;
 		CityCameraRotation = 0.0f;
@@ -822,8 +836,9 @@ void APlanetCameraPawn::EnterCityEditorMode(FVector InCityCenter)
 			// Disable lag so arm snaps instantly
 			CityCameraArm->bEnableCameraLag = false;
 			
-			FVector RelativeCityLocation = CityCenter - PlanetCenter;
-			CityCameraArm->SetRelativeLocation(RelativeCityLocation);
+			// Arm pivot in pawn local space: city is directly along local Z at CityDist
+			float CityDist = FVector::Dist(CityCenter, PlanetCenter);
+			CityCameraArm->SetRelativeLocation(FVector(0.0f, 0.0f, CityDist));
 			CityCameraArm->SetRelativeRotation(FRotator(CityCameraPitch, CityCameraYaw, 0.0f));
 			CityCameraArm->TargetArmLength = CityCameraOrbitDistance;
 			

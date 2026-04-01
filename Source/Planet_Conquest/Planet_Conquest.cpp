@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "Planet_Conquest.h"
 #include "Modules/ModuleManager.h"

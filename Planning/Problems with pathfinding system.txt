@@ -1,0 +1,12 @@
+1. AI vehicles seem to reset path every 3 seconds when going to resource clusters (is AI retasking vehicles or is it the vehicle controller itself?)
+2. Sometimes if a path includes an obstacle, a vehicle will stop at one of the nodes around that obstacle instead of going all the way to the final Destination
+3. Sometimes when clicking a location target, no waypoint node appears at that spot. Expecially when starting at a node around an obstacle, sometimes the vehicle moves to another node at that obstacle as the final location instead.
+4. player vehicles only capture some resources in area before stopping (might be tied to problem 2)
+5. vehicles often overshoot by doing a near full rotation around a obstacle node hexagon before continuing, sometimes hitting 5 out of 6, which shouldn't happen since the line of sight becomes visible after 2 or 3 nodes around the obstacle
+6. Still seeing vehicles having a "ghost" set of one or two extra node paths that appear to the side of the vehicle, creating a tight trail that adds a new node every tick. But the vehicle doesn't go to these nodes, they just appear beside it. often happens after a vehicle is set to attack a mine.
+
+One note is that resource 6 node hexagon borders do overlap, despite them supposed to be being removed if they are too close to a different resource. This means a final node destination would appear inside the hexagon of a different resource, which should be impossible to get to. This would cause problems.
+Are we overthinking this?
+I want the vehicle task of attacking mines to set a node near the mine, but not one of the 6 notes that border the resource. And yet when capturing one of the resources, one of the 6 border nodes is the final destination.
+We could just never use border nodes as destinations. It might be preferable to have clicking on a resource set a node near the resource, close enough to capture it, but not close enough to intervere with the border nodes. But this would mean the final destination node needs to be outside of all hexagon borders, so they need to be farther away (+400 units) from any resource. That means looping over more resources. That means more processing.
+

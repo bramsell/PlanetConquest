@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -17,6 +17,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:	
 	virtual void Tick(float DeltaTime) override;
@@ -59,9 +60,23 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "City")
 	class APlanetActor* OwningPlanet;
 
+	// Continent this city sits on (index into PlanetActor::ContinentSeeds; -1 = unknown)
+	// Set by PlanetActor::SpawnCities at spawn time
+	UPROPERTY(BlueprintReadOnly, Category = "City")
+	int32 ContinentID = -1;
+
+	// Navigation waypoint indices registered with planet
+	TArray<int32> RegisteredWaypointIndices;
+
 	// Align city to point outward from planet center
 	UFUNCTION(CallInEditor, Category = "City")
 	void AlignToPlanet();
+
+	// Generate navigation waypoints around this city
+	void GenerateNavigationWaypoints();
+
+	// Remove navigation waypoints when city is destroyed
+	void RemoveNavigationWaypoints();
 
 	// Spawn capital building (called by PlanetActor after setting properties)
 	void SpawnCapitalBuilding();
@@ -113,6 +128,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "City")
 	void SpawnVehicle();
 
+	// Spawn a ship in the water near this city (requires bIsCoastal)
+	UFUNCTION(BlueprintCallable, Category = "City")
+	void SpawnShip();
+
 	// Add buildings to the city
 	UFUNCTION(BlueprintCallable, Category = "City|Buildings")
 	class AFactoryBuildingActor* AddFactory();
@@ -143,6 +162,15 @@ public:
 	// Cost to spawn a vehicle
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "City")
 	int32 VehicleCost = 1000;
+
+	// Cost to spawn a ship (requires bIsCoastal)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "City")
+	int32 ShipCost = 1000;
+
+	// Whether this city was spawned on a coastal location (adjacent to water)
+	// Coastal cities can build ships
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "City")
+	bool bIsCoastal = false;
 
 	// Distance from city to spawn vehicles
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "City")

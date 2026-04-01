@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "PlanetConquestGameMode.h"
 #include "PlanetCameraPawn.h"
@@ -300,8 +300,8 @@ void APlanetConquestGameMode::OnEnemyResourceCaptured(EOwnerTeam CapturingTeam, 
 	// -20 disposition per enemy resource captured, can go to -100
 	ModifyDisposition(CapturingTeam, OriginalOwner, -20.0f);
 	
-	UE_LOG(LogTemp, Display, TEXT("[FEED] Team %d captured Team %d's resource - relationship worsened (-20)"),
-		(int32)CapturingTeam, (int32)OriginalOwner);
+	//UE_LOG(LogTemp, Display, TEXT("[FEED] Team %d captured Team %d's resource - relationship worsened (-20)"),
+	//	(int32)CapturingTeam, (int32)OriginalOwner);
 }
 
 void APlanetConquestGameMode::OnBuildingDamaged(EOwnerTeam AttackerTeam, EOwnerTeam VictimTeam, float DamagePercent, bool bIsCapitalBuilding, const FString& BuildingType)
@@ -597,7 +597,7 @@ void APlanetConquestGameMode::OnTeamAttackedTeam(EOwnerTeam AttackerTeam, EOwner
 	}
 	
 	// Check all other teams for "enemy of my enemy is my friend" bonus
-	TArray<EOwnerTeam> AllTeams = {EOwnerTeam::Player, EOwnerTeam::AI1, EOwnerTeam::AI2, EOwnerTeam::AI3, EOwnerTeam::AI4, EOwnerTeam::AI5, EOwnerTeam::AI6};
+	TArray<EOwnerTeam> AllTeams = {EOwnerTeam::Player, EOwnerTeam::AI1, EOwnerTeam::AI2, EOwnerTeam::AI3, EOwnerTeam::AI4, EOwnerTeam::AI5, EOwnerTeam::AI6, EOwnerTeam::AI7, EOwnerTeam::AI8, EOwnerTeam::AI9, EOwnerTeam::AI10, EOwnerTeam::AI11, EOwnerTeam::AI12, EOwnerTeam::AI13, EOwnerTeam::AI14, EOwnerTeam::AI15, EOwnerTeam::AI16, EOwnerTeam::AI17, EOwnerTeam::AI18, EOwnerTeam::AI19};
 	
 	for (EOwnerTeam ObserverTeam : AllTeams)
 	{

@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -39,6 +39,13 @@ public:
 
 private:
 	float TimeSinceLastShot = 0.0f;
+
+	// Actor caches - refreshed every 2s to avoid per-fire GetAllActorsOfClass
+	UPROPERTY()
+	TArray<AActor*> CachedAllVehicles;
+	UPROPERTY()
+	TArray<AActor*> CachedAllCities;
+	float TurretCacheTimer = 999.0f;
 
 	// Find and fire at enemies
 	void FindAndFireAtEnemies();

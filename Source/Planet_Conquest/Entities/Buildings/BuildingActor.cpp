@@ -1,6 +1,7 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "BuildingActor.h"
+#include "../../World/PlanetActor.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/WidgetComponent.h"
@@ -23,7 +24,7 @@ ABuildingActor::ABuildingActor()
 	CollisionSphere->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	CollisionSphere->SetCollisionResponseToAllChannels(ECR_Ignore);
 	CollisionSphere->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-	CollisionSphere->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	CollisionSphere->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore); // Don't block vehicles - pathfinding handles avoidance
 	CollisionSphere->SetCollisionResponseToChannel(ECC_GameTraceChannel1, ECR_Block);
 	CollisionSphere->SetCollisionObjectType(ECC_WorldStatic);
 	CollisionSphere->SetHiddenInGame(true);
@@ -163,9 +164,10 @@ void ABuildingActor::AlignToPlanet()
 	{
 		FVector CurrentLocation = GetActorLocation();
 		FVector DirectionFromCenter = (CurrentLocation - PlanetCenter).GetSafeNormal();
-		
-		// Position on planet surface
-		FVector SurfacePosition = PlanetCenter + DirectionFromCenter * PlanetRadius;
+
+		// PlanetRadius is already set to the terrain-surface radius by PlanetActor at spawn time
+		// (ActualTerrainRadius = PlanetRadius * (1 + TerrainHeight)), so just add the stand-on offset.
+		FVector SurfacePosition = PlanetCenter + DirectionFromCenter * (PlanetRadius + 50.0f);
 		SetActorLocation(SurfacePosition);
 		
 		// Orient building to stand upright (Z-axis pointing away from planet)
@@ -211,6 +213,39 @@ void ABuildingActor::UpdateColor()
 				case EOwnerTeam::AI8:
 					TeamColor = FLinearColor(1.0f, 1.0f, 1.0f); // White
 					break;
+				case EOwnerTeam::AI9:
+					TeamColor = FLinearColor(1.0f, 0.0f, 0.5f); // Hot pink
+					break;
+				case EOwnerTeam::AI10:
+					TeamColor = FLinearColor(1.0f, 0.55f, 0.0f); // Orange
+					break;
+				case EOwnerTeam::AI11:
+					TeamColor = FLinearColor(0.0f, 0.7f, 0.5f); // Teal
+					break;
+				case EOwnerTeam::AI12:
+					TeamColor = FLinearColor(0.5f, 1.0f, 0.0f); // Lime
+					break;
+				case EOwnerTeam::AI13:
+					TeamColor = FLinearColor(1.0f, 0.0f, 1.0f); // Magenta
+					break;
+				case EOwnerTeam::AI14:
+					TeamColor = FLinearColor(0.55f, 0.27f, 0.0f); // Bronze
+					break;
+				case EOwnerTeam::AI15:
+					TeamColor = FLinearColor(0.05f, 0.1f, 0.5f); // Navy
+					break;
+				case EOwnerTeam::AI16:
+					TeamColor = FLinearColor(1.0f, 0.75f, 0.0f); // Gold
+					break;
+				case EOwnerTeam::AI17:
+					TeamColor = FLinearColor(0.7f, 0.7f, 0.7f); // Silver
+					break;
+				case EOwnerTeam::AI18:
+					TeamColor = FLinearColor(0.55f, 0.0f, 0.05f); // Crimson
+					break;
+				case EOwnerTeam::AI19:
+					TeamColor = FLinearColor(0.5f, 1.0f, 0.75f); // Mint
+					break;
 				default:
 					TeamColor = FLinearColor::Gray;
 					break;
@@ -244,6 +279,28 @@ FLinearColor ABuildingActor::GetTeamColor() const
 			return FLinearColor(0.2f, 0.3f, 0.85f); // Royal blue
 		case EOwnerTeam::AI8:
 			return FLinearColor(1.0f, 1.0f, 1.0f); // White
+		case EOwnerTeam::AI9:
+			return FLinearColor(1.0f, 0.0f, 0.5f); // Hot pink
+		case EOwnerTeam::AI10:
+			return FLinearColor(1.0f, 0.55f, 0.0f); // Orange
+		case EOwnerTeam::AI11:
+			return FLinearColor(0.0f, 0.7f, 0.5f); // Teal
+		case EOwnerTeam::AI12:
+			return FLinearColor(0.5f, 1.0f, 0.0f); // Lime
+		case EOwnerTeam::AI13:
+			return FLinearColor(1.0f, 0.0f, 1.0f); // Magenta
+		case EOwnerTeam::AI14:
+			return FLinearColor(0.55f, 0.27f, 0.0f); // Bronze
+		case EOwnerTeam::AI15:
+			return FLinearColor(0.05f, 0.1f, 0.5f); // Navy
+		case EOwnerTeam::AI16:
+			return FLinearColor(1.0f, 0.75f, 0.0f); // Gold
+		case EOwnerTeam::AI17:
+			return FLinearColor(0.7f, 0.7f, 0.7f); // Silver
+		case EOwnerTeam::AI18:
+			return FLinearColor(0.55f, 0.0f, 0.05f); // Crimson
+		case EOwnerTeam::AI19:
+			return FLinearColor(0.5f, 1.0f, 0.75f); // Mint
 		default:
 			return FLinearColor::Gray;
 	}

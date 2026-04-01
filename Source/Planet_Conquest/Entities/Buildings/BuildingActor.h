@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -68,6 +68,10 @@ public:
 	// Parent city that owns this building
 	UPROPERTY(BlueprintReadOnly, Category = "Building")
 	class ACityActor* ParentCity = nullptr;
+
+	// Planet reference for terrain height queries
+	UPROPERTY(BlueprintReadOnly, Category = "Building")
+	class APlanetActor* OwningPlanet = nullptr;
 
 	// Health system
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Building|Health")

@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "ProjectileActor.h"
 #include "Components/StaticMeshComponent.h"
@@ -149,9 +149,16 @@ void AProjectileActor::MoveTowardsTarget(float DeltaTime)
 	// Move straight towards target
 	FVector NewLocation = CurrentLocation + DirectionToTarget * ProjectileSpeed * DeltaTime;
 
-	// Project onto planet surface to follow curvature
+	// Project onto planet surface to follow curvature, then apply arc height
 	FVector DirectionFromPlanet = (NewLocation - PlanetCenter).GetSafeNormal();
-	NewLocation = PlanetCenter + DirectionFromPlanet * PlanetRadius;
+	float ArcOffset = 0.0f;
+	if (ArcHeight > 0.0f && ArcMaxFlightTime > KINDA_SMALL_NUMBER)
+	{
+		// Progress 0→1 over the estimated flight time; sin curve peaks at midpoint
+		float Progress = FMath::Clamp(CurrentLifetime / ArcMaxFlightTime, 0.0f, 1.0f);
+		ArcOffset = ArcHeight * FMath::Sin(Progress * PI);
+	}
+	NewLocation = PlanetCenter + DirectionFromPlanet * (PlanetRadius + ArcOffset);
 
 	// MANUAL DISTANCE CHECK - Fallback for when sweep fails
 	if (TargetActor && IsValid(TargetActor))

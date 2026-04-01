@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -156,7 +156,7 @@ public:
 
 	// Align this vehicle to the planet surface
 	UFUNCTION(BlueprintCallable, Category = "Vehicle")
-	void AlignToPlanet();
+	virtual void AlignToPlanet();
 
 	// Selection
 	UFUNCTION(BlueprintCallable, Category = "Vehicle")
@@ -172,6 +172,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Movement")
 	float MovementSpeed = 500.0f; // Units per second
 
+	// If true, combat "within attack range" logic won't clear the movement path.
+	// Ships set this true so they keep sailing while auto-fire handles combat.
+	bool bCanMoveWhileFiring = false;
+
+	// If false, vehicle never moves onto land to capture a resource (e.g. ships).
+	// PostMineResource is discarded instead of triggering a capture approach.
+	bool bCanCaptureResources = true;
+
+	// World-unit arc height added to projectile mid-flight (0 = flat surface-hugging).
+	// Set per vehicle subclass (e.g. ships use 800 so shells clear terrain).
+	float ProjectileArcHeight = 0.0f;
+
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Movement")
 	FVector TargetLocation = FVector::ZeroVector;
 
@@ -185,58 +197,44 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Combat")
 	bool bIsFiring = false;
 
-	// Obstacle avoidance settings
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Movement")
-	float AvoidanceDistance = 600.0f; // How far to stay away from static obstacles (cities are 400 radius)
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Movement")
-	float VehicleAvoidanceDistance = 100.0f; // Smaller avoidance for other vehicles
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Movement")
-	float LookAheadTime = 1.5f; // How many seconds ahead to check for obstacles
+	// ===== WAYPOINT PATHFINDING (NEW SYSTEM) =====
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Movement")
-	float LateralCheckDistance = 500.0f; // How far to check to the sides (must detect cities at 90°)
+	// Current path as array of waypoints (world positions)
+	UPROPERTY()
+	TArray<FVector> CurrentPath;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vehicle|Movement")
-	int32 SteeringAngles = 8; // Number of angles to test (more = smoother but slower)
+	// Index of current waypoint we're moving toward
+	UPROPERTY()
+	int32 CurrentWaypointIndex = 0;
 
-	// Track if vehicle is stuck (blocked by collision)
-	int32 BlockedFrameCount = 0;
-	FVector LastLocation = FVector::ZeroVector;
+	// Timer for repathing during combat (repath every 2-3 seconds for moving targets)
+	float CombatRepathTimer = 0.0f;
 	
-	// Steering bias when stuck (1.0 = right, -1.0 = left, 0.0 = no bias)
-	float SteeringBias = 0.0f;
-	int32 FramesSinceLastMovement = 0;
-	
-	// Steering smoothing to reduce veering (stores last frame's steering direction)
-	FVector PreviousSteeringDirection = FVector::ZeroVector;
+	// Last pathfinding error (for debugging)
+	UPROPERTY(BlueprintReadOnly, Category = "Vehicle|Debug")
+	FString LastPathfindingError;
 
-	// Stuck detection and recovery
-	FVector LastStuckCheckPosition = FVector::ZeroVector;
-	float TimeSinceLastMovement = 0.0f;
-	
-	// Progress-based stuck detection (catches oscillating vehicles)
-	FVector LastProgressCheckPosition = FVector::ZeroVector;
-	float LastProgressCheckTime = 0.0f;
-	float LastDistanceToTarget = 0.0f;
-	
+	// Recovery maneuvers (kept for resource clipping recovery)
 	bool bIsBackingUp = false;
 	FVector BackupTargetLocation = FVector::ZeroVector;
 	float BackupProgress = 0.0f;
 	bool bIsMovingPerpendicular = false;
 	FVector PerpendicularTargetLocation = FVector::ZeroVector;
 	float PerpendicularProgress = 0.0f;
-	
-	// Coastline following (water avoidance)
-	bool bFollowingCoastline = false;
-	bool bCoastlineOnLeft = false; // True if water is on left, false if on right
-	FVector CoastlineFollowDirection = FVector::ZeroVector;
-	float CoastlineFollowStartTime = 0.0f;
+
+	// Debug throttle timer for waypoint following
+	float DebugLogTimer = 0.0f;
 
 	// Set a target location for the vehicle to move to
 	UFUNCTION(BlueprintCallable, Category = "Vehicle")
 	void SetTargetLocation(FVector NewTarget);
+
+	// Set a path to target location using navigation graph pathfinding
+	UFUNCTION(BlueprintCallable, Category = "Vehicle")
+	void SetPathToTarget(FVector Destination);
+	
+	// Internal path creation - preserves combat state (used by task execution and combat positioning)
+	virtual bool CreatePathTo(FVector Destination);
 
 	// Clear the target
 	UFUNCTION(BlueprintCallable, Category = "Vehicle")
@@ -320,6 +318,21 @@ public:
 	// Track last team/actor that damaged this vehicle for relationship updates and defense AI
 	EOwnerTeam LastDamagingTeam = EOwnerTeam::Neutral;
 	TWeakObjectPtr<AActor> LastDamagingActor = nullptr;
+
+	// Actor caches - refreshed every 2s to eliminate per-frame GetAllActorsOfClass queries
+	UPROPERTY()
+	TArray<AActor*> CachedAllCities;
+	UPROPERTY()
+	TArray<AActor*> CachedAllVehicles;
+	UPROPERTY()
+	TArray<AActor*> CachedAllResources;
+	UPROPERTY()
+	TArray<AActor*> CachedAllBuildings;
+	UPROPERTY()
+	TArray<AActor*> CachedAllMines;
+	UPROPERTY()
+	AAITeamController* CachedTeamController = nullptr;
+	float ActorCacheTimer = 999.0f; // Start high so first tick populates immediately
 
 	UFUNCTION(BlueprintCallable, Category = "Vehicle|Combat")
 	void UpdateHealthBar();
@@ -426,9 +439,7 @@ public:
 
 private:
 	void MoveTowardsTarget(float DeltaTime);
-	
-	// Obstacle avoidance helpers
-	bool DetectObstacleAhead(FVector CurrentDirection, float& OutDistance, FVector& OutHitLocation, AActor*& OutHitActor);
-	bool CheckLateralObstacle(FVector CurrentDirection, float AngleDegrees, float& OutDistance);
-	FVector CalculateSteeringDirection(FVector CurrentDirection, FVector TargetDirection, float DeltaTime);
+	// Push a candidate combat position outside any city's pathfinding exclusion zone.
+	// Prevents defenders from getting stuck when the optimal stop point falls inside a city.
+	FVector AdjustPositionForCityExclusion(FVector Position) const;
 };

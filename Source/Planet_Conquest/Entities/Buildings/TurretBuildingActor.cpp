@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "TurretBuildingActor.h"
 #include "Components/StaticMeshComponent.h"
@@ -62,7 +62,16 @@ void ATurretBuildingActor::Tick(float DeltaTime)
 	Super::Tick(DeltaTime);
 	
 	TimeSinceLastShot += DeltaTime;
-	
+
+	// Refresh actor caches every 2s (avoids per-shot GetAllActorsOfClass)
+	TurretCacheTimer += DeltaTime;
+	if (TurretCacheTimer >= 2.0f)
+	{
+		TurretCacheTimer = FMath::FRandRange(0.0f, 0.5f);
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), CachedAllVehicles);
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), CachedAllCities);
+	}
+
 	// Check fire rate
 	float ShotInterval = 1.0f / FireRate;
 	if (TimeSinceLastShot >= ShotInterval)
@@ -81,8 +90,7 @@ void ATurretBuildingActor::FindAndFireAtEnemies()
 	const float HostilityThreshold = -0.5f; // Fire on enemies (relationship <= -0.5)
 	
 	// First priority: Enemy vehicles
-	TArray<AActor*> AllVehicles;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
+	const TArray<AActor*>& AllVehicles = CachedAllVehicles;
 	
 	AActor* NearestEnemy = nullptr;
 	float NearestDistance = FireRange;
@@ -114,8 +122,7 @@ void ATurretBuildingActor::FindAndFireAtEnemies()
 	// Second priority: Enemy cities (if no vehicles in range)
 	if (!NearestEnemy)
 	{
-		TArray<AActor*> AllCities;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCities);
+		const TArray<AActor*>& AllCities = CachedAllCities;
 		
 		for (AActor* Actor : AllCities)
 		{

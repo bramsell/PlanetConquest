@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -37,6 +37,10 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void OnSpawnVehicleClicked();
 
+	// Button click handler - spawn ship (only available on coastal cities)
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void OnSpawnShipClicked();
+
 	// Button click handler - buy factory
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void OnBuyFactoryClicked();
@@ -52,6 +56,18 @@ protected:
 	// Check if player can afford to spawn a vehicle
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "UI")
 	bool CanAffordVehicle() const;
+
+	// Check if player can afford to spawn a ship
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "UI")
+	bool CanAffordShip() const;
+
+	// Returns true if the current city is coastal (ship button should be shown)
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "UI")
+	bool IsCityCoastal() const;
+
+	// Returns Visible/Collapsed based on whether the city is coastal (bind to ship button visibility)
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "UI")
+	ESlateVisibility GetShipButtonVisibility() const;
 
 	// Check if player can afford to buy a factory
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "UI")

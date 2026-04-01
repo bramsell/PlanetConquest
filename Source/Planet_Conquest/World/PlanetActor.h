@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -40,6 +40,68 @@ struct FContinentSeed
 		, Size(InSize)
 		, Roughness(InRoughness)
 		, bIsLand(bInIsLand)
+	{}
+};
+
+// Navigation graph edge connecting two nodes
+USTRUCT()
+struct FNavEdge
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	int32 TargetIndex;
+
+	UPROPERTY()
+	float Distance;
+
+	FNavEdge()
+		: TargetIndex(-1)
+		, Distance(0.0f)
+	{}
+
+	FNavEdge(int32 InTarget, float InDist)
+		: TargetIndex(InTarget)
+		, Distance(InDist)
+	{}
+};
+
+// Navigation graph node on planet surface
+USTRUCT()
+struct FNavNode
+{
+	GENERATED_BODY()
+
+	// Unit sphere direction (normalized)
+	UPROPERTY()
+	FVector Position;
+
+	// Actual world position on planet surface
+	UPROPERTY()
+	FVector WorldPosition;
+
+	// Node index in NavNodes array
+	UPROPERTY()
+	int32 Index;
+
+	// Landmass ID for connectivity checking (nodes with same ID are connected)
+	UPROPERTY()
+	int32 LandmassID;
+
+	// Owning actor (for dynamic waypoints from resources/cities, null for static waypoints)
+	// Not serialized - rebuilt dynamically
+	AActor* Owner;
+
+	// Edges to neighboring nodes
+	UPROPERTY()
+	TArray<FNavEdge> Neighbors;
+
+	FNavNode()
+		: Position(FVector::ZeroVector)
+		, WorldPosition(FVector::ZeroVector)
+		, Index(-1)
+		, LandmassID(-1)
+		, Owner(nullptr)
 	{}
 };
 
@@ -86,8 +148,56 @@ public:
 	// Calculate angular distance between two points on unit sphere (public for vehicle volcano avoidance)
 	float AngularDistance(const FVector& A, const FVector& B) const;
 
+	// Check if there's clear line-of-sight between two world positions (no water, cities, or resources blocking)
+	bool HasClearLineOfSight(const FVector& StartPos, const FVector& EndPos) const;
+	
+	// Helper: Check if two great-circle arcs intersect on the unit sphere
+	bool DoArcsIntersect(const FVector& Arc1Start, const FVector& Arc1End, const FVector& Arc2Start, const FVector& Arc2End) const;
+	
+	// Helper: Calculate angular distance from a point to a great-circle arc (for quick rejection)
+	float AngularDistanceToArc(const FVector& Point, const FVector& ArcStart, const FVector& ArcEnd) const;
+
+	// ===== NAVIGATION GRAPH FUNCTIONS =====
+
+	// Generate navigation graph for vehicle pathfinding (called at startup after terrain generation)
+	void GenerateNavGraph();
+	
+	// Debug visualization: Draw all nav nodes
+	void DebugDrawAllNavNodes();
+
+	// Register a navigation waypoint dynamically (for resources, cities, etc)
+	// Returns the index of the registered waypoint
+	int32 RegisterNavigationWaypoint(FVector WorldPosition, AActor* OwnerActor = nullptr);
+
+	// Unregister a navigation waypoint by index
+	void UnregisterNavigationWaypoint(int32 WaypointIndex, AActor* OwnerActor = nullptr);
+
+	// Regenerate navigation edges after waypoints are added/removed
+	void RegenerateNavigationEdges();
+
+	// Find path from start to end position using A* pathfinding
+	// Returns true if path found, false if unreachable (different landmass, in water, etc)
+	// OutFailureReason will contain specific reason for failure if provided
+	bool FindPath(FVector StartWorldPos, FVector EndWorldPos, TArray<FVector>& OutPath, bool bDebugLog = false, FString* OutFailureReason = nullptr);
+
+	// Calculate great-circle distance heuristic between two nav nodes (for A* pathfinding)
+	float HeuristicDistance(int32 NodeA, int32 NodeB) const;
+
+	// Find nearest navigation node to a world position
+	int32 FindNearestNavNode(FVector WorldPos) const;
+
+	// ===== PUBLIC MEMBERS =====
+
 	// Continent seeds (public for camera positioning)
 	TArray<FContinentSeed> ContinentSeeds;
+
+	// Navigation graph nodes (for vehicle pathfinding)
+	UPROPERTY()
+	TArray<FNavNode> NavNodes;
+
+	// Number of distinct landmasses (for connectivity checking)
+	UPROPERTY()
+	int32 LandmassCount;
 
 	// ===== COMPONENTS =====
 	
@@ -282,7 +392,7 @@ public:
 
 	// Total number of cities to spawn (player + AI)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet|Cities", meta = (ClampMin = "1", ClampMax = "20", EditCondition = "bSpawnCities"))
-	int32 NumCitiesToSpawn = 9;
+	int32 NumCitiesToSpawn = 20;
 
 	// Place all cities on the same continent (recommended for gameplay balance)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet|Cities", meta = (EditCondition = "bSpawnCities"))
@@ -309,6 +419,10 @@ public:
 	// Number of resources spawned near cities at start (7-10 per city territory)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Planet|Resources", meta = (ClampMin = "0", ClampMax = "100"))
 	int32 NumberOfResourcesAtStart = 45;
+
+	// Get the continent ID (index into ContinentSeeds) that a point belongs to
+	// Returns -1 if point is in ocean
+	int32 GetContinentIdForPoint(const FVector& SpherePoint) const;
 
 private:
 	// Spawned cities
@@ -346,10 +460,6 @@ private:
 	// Check if a water point is ocean (true) or lake (false)
 	// Only valid for points where IsPointOnLand() returns false
 	bool IsWaterPointOcean(const FVector& SpherePoint) const;
-
-	// Get the continent ID (index into ContinentSeeds) that a point belongs to
-	// Returns -1 if point is in ocean
-	int32 GetContinentIdForPoint(const FVector& SpherePoint) const;
 
 	// Apply domain warp to a position for organic shapes
 	FVector DomainWarp(const FVector& Point, float WarpStrength, float WarpScale, int32 Seed) const;

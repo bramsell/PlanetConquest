@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -18,7 +18,18 @@ enum class EOwnerTeam : uint8
 	AI5 UMETA(DisplayName = "AI Team 5"),
 	AI6 UMETA(DisplayName = "AI Team 6"),
 	AI7 UMETA(DisplayName = "AI Team 7"),
-	AI8 UMETA(DisplayName = "AI Team 8")
+	AI8 UMETA(DisplayName = "AI Team 8"),
+	AI9 UMETA(DisplayName = "AI Team 9"),
+	AI10 UMETA(DisplayName = "AI Team 10"),
+	AI11 UMETA(DisplayName = "AI Team 11"),
+	AI12 UMETA(DisplayName = "AI Team 12"),
+	AI13 UMETA(DisplayName = "AI Team 13"),
+	AI14 UMETA(DisplayName = "AI Team 14"),
+	AI15 UMETA(DisplayName = "AI Team 15"),
+	AI16 UMETA(DisplayName = "AI Team 16"),
+	AI17 UMETA(DisplayName = "AI Team 17"),
+	AI18 UMETA(DisplayName = "AI Team 18"),
+	AI19 UMETA(DisplayName = "AI Team 19")
 };
 
 UENUM(BlueprintType)
@@ -42,6 +53,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:	
 	virtual void Tick(float DeltaTime) override;
@@ -69,9 +81,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Resource|Planet")
 	float PlanetRadius = 100000.0f;
 
+	// Reference to owning planet actor (for navigation waypoint registration)
+	UPROPERTY()
+	class APlanetActor* OwningPlanet = nullptr;
+
+	// Continent this resource sits on (index into PlanetActor::ContinentSeeds; -1 = ocean/unknown)
+	UPROPERTY(BlueprintReadOnly, Category = "Resource|Planet")
+	int32 ContinentID = -1;
+
+	// Navigation waypoint indices registered with planet
+	TArray<int32> RegisteredWaypointIndices;
+
 	// Align this resource to the planet surface
 	UFUNCTION(BlueprintCallable, Category = "Resource")
 	void AlignToPlanet();
+
+	// Generate navigation waypoints around this resource
+	void GenerateNavigationWaypoints();
+
+	// Remove navigation waypoints when resource is destroyed
+	void RemoveNavigationWaypoints();
 
 	// Selection
 	UFUNCTION(BlueprintCallable, Category = "Resource")
@@ -156,6 +185,10 @@ public:
 	float CaptureRange = 500.0f; // Distance within which vehicles can capture
 
 	float TimeSinceLastInfluenceChange = 0.0f;
+
+	// Cached vehicle list - populated once per InfluenceInterval (was 3 calls/interval → 1)
+	UPROPERTY()
+	TArray<AActor*> CachedAllVehiclesForResource;
 
 	// Track which team is currently influencing this resource
 	EOwnerTeam CapturingTeam = EOwnerTeam::Neutral;

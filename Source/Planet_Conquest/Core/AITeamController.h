@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -10,6 +10,7 @@
 // Forward declarations
 class AVehicleActor;
 class ACityActor;
+class AMineActor;
 class AResourceActor;
 class ABuildingActor;
 
@@ -315,8 +316,8 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Personality")
 	float KaijuSafetyDistance = 4000.0f;
 
-	// P2.1 Range: Maximum distance from city to claim unclaimed resources (multiplier of territory radius 5000)
-	// Archetype defaults: Warmonger=3.0, Opportunistic=4.0, Cautious=5.0, Expansionist=6.0
+	// P2.1 Range: Base search radius per city = TerritoryRadius * Multiplier * NumCities
+	// Archetype defaults: Warmonger=3.0 (15k/city), Opportunistic=5.0 (25k/city), Cautious=5.0 (25k/city), Expansionist=6.0 (30k/city)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI|Personality")
 	float P2_1_RangeMultiplier = 4.0f;
 
@@ -344,6 +345,19 @@ public:
 	
 	UPROPERTY(BlueprintReadOnly, Category = "AI")
 	int32 BlackIncomePerCycle = 0;
+
+	// HUD debug cache — populated each ExecuteIncomeLayer tick
+	UPROPERTY(BlueprintReadOnly, Category = "AI|Debug")
+	float CachedEasyIncomeRadius = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "AI|Debug")
+	int32 CachedTotalResourcesInZone = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "AI|Debug")
+	int32 CachedUnclaimedResourcesInZone = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "AI|Debug")
+	TArray<AMineActor*> CachedP23EnemyMines;
 	
 	// Reserved resources (protected from trading)
 	// Updated each decision cycle based on active priorities
@@ -384,6 +398,23 @@ public:
 	
 	// Aid requests (both incoming and outgoing)
 	TArray<FAidRequest> AidRequests;
+
+	// Actor caches - populated once per MakeDecision() call to eliminate repeated GetAllActorsOfClass queries
+	// UPROPERTY required so GC nulls these out when referenced actors are destroyed (prevents dangling ptr crashes)
+	UPROPERTY()
+	TArray<AActor*> CachedAllCities;
+	UPROPERTY()
+	TArray<AActor*> CachedAllVehicles;
+	UPROPERTY()
+	TArray<AActor*> CachedAllResources;
+	UPROPERTY()
+	TArray<AActor*> CachedAllBuildings;
+	UPROPERTY()
+	TArray<AActor*> CachedAllMines;
+	UPROPERTY()
+	TArray<AActor*> CachedAllKaiju;
+	UPROPERTY()
+	TArray<AActor*> CachedAllAIControllers;
 	
 	// Assess current world state for decision-making (called every DecisionInterval)
 	void AssessWorldState();
@@ -532,11 +563,17 @@ public:
 	// ========== VEHICLE TRACKING ==========
 	
 	// Priority-based vehicle tracking (higher priorities can pull from lower ones)
+	UPROPERTY()
 	TArray<AVehicleActor*> Priority1Vehicles;  // Survival - Defending cities under active attack
+	UPROPERTY()
 	TArray<AVehicleActor*> Priority2Vehicles;  // Territory - Claiming nearby resources (personality radius)
+	UPROPERTY()
 	TArray<AVehicleActor*> Priority3Vehicles;  // Expansion - Claiming distant resources (income threshold)
+	UPROPERTY()
 	TArray<AVehicleActor*> Priority4Vehicles;  // Defense - Defensive positions (proximity threat)
+	UPROPERTY()
 	TArray<AVehicleActor*> Priority5Vehicles;  // War - Attacking enemy cities
+	UPROPERTY()
 	TArray<AVehicleActor*> Priority6Vehicles;  // Aid - Helping allies under attack
 
 	// ========== HELPER METHODS ==========

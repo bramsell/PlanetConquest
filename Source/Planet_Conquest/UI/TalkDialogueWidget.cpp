@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "TalkDialogueWidget.h"
 #include "Components/Button.h"
@@ -236,6 +236,17 @@ FText UTalkDialogueWidget::GetCityTeamName() const
 		case EOwnerTeam::AI6: return FText::FromString(TEXT("AI Team 7"));
 		case EOwnerTeam::AI7: return FText::FromString(TEXT("AI Team 8"));
 		case EOwnerTeam::AI8: return FText::FromString(TEXT("AI Team 9"));
+		case EOwnerTeam::AI9: return FText::FromString(TEXT("AI Team 10"));
+		case EOwnerTeam::AI10: return FText::FromString(TEXT("AI Team 11"));
+		case EOwnerTeam::AI11: return FText::FromString(TEXT("AI Team 12"));
+		case EOwnerTeam::AI12: return FText::FromString(TEXT("AI Team 13"));
+		case EOwnerTeam::AI13: return FText::FromString(TEXT("AI Team 14"));
+		case EOwnerTeam::AI14: return FText::FromString(TEXT("AI Team 15"));
+		case EOwnerTeam::AI15: return FText::FromString(TEXT("AI Team 16"));
+		case EOwnerTeam::AI16: return FText::FromString(TEXT("AI Team 17"));
+		case EOwnerTeam::AI17: return FText::FromString(TEXT("AI Team 18"));
+		case EOwnerTeam::AI18: return FText::FromString(TEXT("AI Team 19"));
+		case EOwnerTeam::AI19: return FText::FromString(TEXT("AI Team 20"));
 		default: return FText::FromString(TEXT("Neutral"));
 	}
 }
@@ -1744,7 +1755,11 @@ void UTalkDialogueWidget::OnRequestAllianceClicked()
 		
 		TArray<EOwnerTeam> PotentialEnemies = { EOwnerTeam::AI1, EOwnerTeam::AI2, EOwnerTeam::AI3, 
 												EOwnerTeam::AI4, EOwnerTeam::AI5, EOwnerTeam::AI6,
-												EOwnerTeam::AI7, EOwnerTeam::AI8 };
+												EOwnerTeam::AI7, EOwnerTeam::AI8, EOwnerTeam::AI9,
+												EOwnerTeam::AI10, EOwnerTeam::AI11, EOwnerTeam::AI12,
+												EOwnerTeam::AI13, EOwnerTeam::AI14, EOwnerTeam::AI15,
+												EOwnerTeam::AI16, EOwnerTeam::AI17, EOwnerTeam::AI18,
+												EOwnerTeam::AI19 };
 		
 		for (EOwnerTeam PotentialEnemy : PotentialEnemies)
 		{
@@ -2407,7 +2422,7 @@ void UTalkDialogueWidget::OnRelationsAskAboutOtherTeamClicked()
 	}
 
 	// Get all AI teams except the current one
-	TArray<EOwnerTeam> AllTeams = {EOwnerTeam::AI1, EOwnerTeam::AI2, EOwnerTeam::AI3, EOwnerTeam::AI4, EOwnerTeam::AI5, EOwnerTeam::AI6, EOwnerTeam::AI7, EOwnerTeam::AI8};
+	TArray<EOwnerTeam> AllTeams = {EOwnerTeam::AI1, EOwnerTeam::AI2, EOwnerTeam::AI3, EOwnerTeam::AI4, EOwnerTeam::AI5, EOwnerTeam::AI6, EOwnerTeam::AI7, EOwnerTeam::AI8, EOwnerTeam::AI9, EOwnerTeam::AI10, EOwnerTeam::AI11, EOwnerTeam::AI12, EOwnerTeam::AI13, EOwnerTeam::AI14, EOwnerTeam::AI15, EOwnerTeam::AI16, EOwnerTeam::AI17, EOwnerTeam::AI18, EOwnerTeam::AI19};
 	EOwnerTeam CurrentAITeam = CurrentCity->OwnerTeam;
 	
 	// Build a comprehensive relationship summary
@@ -2461,6 +2476,17 @@ void UTalkDialogueWidget::OnRelationsAskAboutOtherTeamClicked()
 		else if (OtherTeam == EOwnerTeam::AI6) OtherTeamName = TEXT("Team 7");
 		else if (OtherTeam == EOwnerTeam::AI7) OtherTeamName = TEXT("Team 8");
 		else if (OtherTeam == EOwnerTeam::AI8) OtherTeamName = TEXT("Team 9");
+		else if (OtherTeam == EOwnerTeam::AI9) OtherTeamName = TEXT("Team 10");
+		else if (OtherTeam == EOwnerTeam::AI10) OtherTeamName = TEXT("Team 11");
+		else if (OtherTeam == EOwnerTeam::AI11) OtherTeamName = TEXT("Team 12");
+		else if (OtherTeam == EOwnerTeam::AI12) OtherTeamName = TEXT("Team 13");
+		else if (OtherTeam == EOwnerTeam::AI13) OtherTeamName = TEXT("Team 14");
+		else if (OtherTeam == EOwnerTeam::AI14) OtherTeamName = TEXT("Team 15");
+		else if (OtherTeam == EOwnerTeam::AI15) OtherTeamName = TEXT("Team 16");
+		else if (OtherTeam == EOwnerTeam::AI16) OtherTeamName = TEXT("Team 17");
+		else if (OtherTeam == EOwnerTeam::AI17) OtherTeamName = TEXT("Team 18");
+		else if (OtherTeam == EOwnerTeam::AI18) OtherTeamName = TEXT("Team 19");
+		else if (OtherTeam == EOwnerTeam::AI19) OtherTeamName = TEXT("Team 20");
 		
 		// Add this relationship to the list
 		FString RelationLine = FString::Printf(TEXT("%s: %s (%.0f)"), *OtherTeamName, *RelationshipDescription, RelationshipValue);

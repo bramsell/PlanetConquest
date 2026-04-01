@@ -1,9 +1,10 @@
-﻿// Copyright Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "AITeamController.h"
 #include "../Entities/Cities/CityActor.h"
 #include "../Entities/Vehicles/VehicleActor.h"
 #include "../Entities/Resources/ResourceActor.h"
+#include "../World/PlanetActor.h"
 #include "../Entities/Buildings/BuildingActor.h"
 #include "../Entities/Buildings/FactoryBuildingActor.h"
 #include "../Entities/Buildings/TurretBuildingActor.h"
@@ -43,7 +44,7 @@ void AAITeamController::ApplyArchetypePreset()
 			
 		case EAIArchetype::Opportunistic:
 			// Balanced aggressor - moderate range, willing to risk Kaiju, attacks neutral/hostile, higher income
-			P2_1_RangeMultiplier = 4.0f;        // 20k range (moderate expansion)
+			P2_1_RangeMultiplier = 5.0f;        // 25k per city (scales with city count)
 			KaijuSafetyDistance = 4000.0f;      // Willing to risk Kaiju for resources
 			P2_3_RelationshipThreshold = 0.0f;  // Attacks neutral and hostile teams
 			P2_3_IncomeMultiplier = 1.2f;       // 120/cycle - slightly higher needs
@@ -79,19 +80,8 @@ void AAITeamController::BeginPlay()
 {
 	Super::BeginPlay();
 	
-	// Auto-randomize archetype (unless manually set to Custom)
-	if (Archetype != EAIArchetype::Custom)
-	{
-		int32 RandomArchetype = FMath::RandRange(0, 3);
-		switch (RandomArchetype)
-		{
-			case 0: Archetype = EAIArchetype::Warmonger; break;
-			case 1: Archetype = EAIArchetype::Opportunistic; break;
-			case 2: Archetype = EAIArchetype::Cautious; break;
-			case 3: Archetype = EAIArchetype::Expansionist; break;
-			default: Archetype = EAIArchetype::Opportunistic; break;
-		}
-	}
+	// Force all AI teams to Opportunistic for testing
+	Archetype = EAIArchetype::Opportunistic;
 	
 	// Apply archetype preset (unless set to Custom)
 	ApplyArchetypePreset();
@@ -111,11 +101,11 @@ void AAITeamController::BeginPlay()
 	// UE_LOG(LogTemp, Warning, TEXT("AI Team Controller started for team: %d | Archetype: %s (P2.1Range:%.1f Kaiju:%.0f RelThresh:%.0f IncomeMult:%.2f)"), 
 	// 	(int32)ControlledTeam, *ArchetypeName, P2_1_RangeMultiplier, KaijuSafetyDistance, P2_3_RelationshipThreshold, P2_3_IncomeMultiplier);
 	
-	// Stagger decision cycles to prevent all AI teams from thinking simultaneously
-	// This prevents frame spikes every 3 seconds by spreading AI decisions across time
-	TimeSinceLastDecision = FMath::FRandRange(0.0f, DecisionInterval);
-	UE_LOG(LogTemp, Log, TEXT("AI Team %d: Decision cycle offset by %.2f seconds"), 
-		(int32)ControlledTeam, TimeSinceLastDecision);
+	// TimeSinceLastDecision is set by the spawner (PlanetActor) to an evenly-distributed
+	// offset so all AI teams fire at different times across the 3s window.
+	// Do not overwrite it here.
+	UE_LOG(LogTemp, Log, TEXT("AI Team %d: Decision cycle offset %.2f / %.2f s"),
+		(int32)ControlledTeam, TimeSinceLastDecision, DecisionInterval);
 	
 	// Set up income collection timer (every 5 seconds, like player)
 	GetWorld()->GetTimerManager().SetTimer(IncomeTimerHandle, this, &AAITeamController::CollectIncome, 5.0f, true);
@@ -152,6 +142,15 @@ void AAITeamController::Tick(float DeltaTime)
 
 void AAITeamController::MakeDecision()
 {
+	// Populate actor caches once for the entire decision cycle (eliminates per-function GetAllActorsOfClass queries)
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), CachedAllCities);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), CachedAllVehicles);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), CachedAllResources);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABuildingActor::StaticClass(), CachedAllBuildings);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMineActor::StaticClass(), CachedAllMines);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AKaijuActor::StaticClass(), CachedAllKaiju);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AAITeamController::StaticClass(), CachedAllAIControllers);
+
 	// Increment decision cycle counter for trade cooldown tracking
 	CurrentDecisionCycle++;
 	
@@ -384,8 +383,7 @@ void AAITeamController::AssessWorldState()
 	MyGlobalState.BlackSubstrate = BlackSubstrate;
 	
 	// Get all cities and vehicles to avoid repeated queries
-	TArray<AActor*> AllCityActors;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCityActors);
+	const TArray<AActor*>& AllCityActors = CachedAllCities;
 	
 	TArray<AVehicleActor*> AllVehicles = GetControlledVehicles();
 	MyGlobalState.TotalVehicles = AllVehicles.Num();
@@ -405,8 +403,7 @@ void AAITeamController::AssessWorldState()
 	}
 	
 	// Get all resources
-	TArray<AActor*> AllResourceActors;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResourceActors);
+	const TArray<AActor*>& AllResourceActors = CachedAllResources;
 	
 	// Calculate my income and find unclaimed resources
 	for (AActor* Actor : AllResourceActors)
@@ -465,8 +462,7 @@ void AAITeamController::AssessWorldState()
 		}
 		
 		// Count hostile vehicles (TODO: check if actively firing)
-		TArray<AActor*> AllVehicleActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicleActors);
+		const TArray<AActor*>& AllVehicleActors = CachedAllVehicles;
 		for (AActor* Actor : AllVehicleActors)
 		{
 			AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
@@ -549,8 +545,7 @@ void AAITeamController::AssessWorldState()
 		}
 		
 		// Count opponent vehicles
-		TArray<AActor*> AllVehicleActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicleActors);
+		const TArray<AActor*>& AllVehicleActors = CachedAllVehicles;
 		for (AActor* Actor : AllVehicleActors)
 		{
 			AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
@@ -606,8 +601,7 @@ void AAITeamController::AssessWorldState()
 			FVector OpponentCityLocation = OpponentCity->GetActorLocation();
 			
 			// Count their vehicles and turrets in their territory
-			TArray<AActor*> AllVehicleActors2;
-			UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicleActors2);
+			const TArray<AActor*>& AllVehicleActors2 = CachedAllVehicles;
 			for (AActor* Actor : AllVehicleActors2)
 			{
 				AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
@@ -778,8 +772,7 @@ void AAITeamController::ExecuteSurvivalLayer()
 		TArray<FDefenseThreat> LowThreats;      // P1.4: Extended mines under attack
 		
 		// Get all our buildings in extended defense range
-		TArray<AActor*> AllBuildingActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABuildingActor::StaticClass(), AllBuildingActors);
+		const TArray<AActor*>& AllBuildingActors = CachedAllBuildings;
 		
 		TArray<ABuildingActor*> OurBuildings;
 		for (AActor* Actor : AllBuildingActors)
@@ -794,8 +787,7 @@ void AAITeamController::ExecuteSurvivalLayer()
 		}
 		
 		// Scan for hostile vehicles in extended range
-		TArray<AActor*> AllVehicleActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicleActors);
+		const TArray<AActor*>& AllVehicleActors = CachedAllVehicles;
 		
 		for (AActor* Actor : AllVehicleActors)
 		{
@@ -893,8 +885,7 @@ void AAITeamController::ExecuteSurvivalLayer()
 		}
 		
 		// Scan for hostile kaiju (they attack all teams)
-		TArray<AActor*> AllKaijuActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AKaijuActor::StaticClass(), AllKaijuActors);
+		const TArray<AActor*>& AllKaijuActors = CachedAllKaiju;
 		
 		for (AActor* Actor : AllKaijuActors)
 		{
@@ -1265,7 +1256,17 @@ void AAITeamController::ExecuteSurvivalLayer()
 				// Skip if already adequately defended
 				if (StillNeeded <= 0) continue;
 				
-				// Try to get defenders from idle pool
+				// Sort available defenders by distance to the threatened building so the
+				// closest vehicles (idle or on lower-priority tasks) are reallocated first.
+				FVector ThreatLocation = Threat.Building->GetActorLocation();
+				AvailableDefenders.Sort([&ThreatLocation](const AVehicleActor& A, const AVehicleActor& B)
+				{
+					float DistA = FVector::DistSquared(A.GetActorLocation(), ThreatLocation);
+					float DistB = FVector::DistSquared(B.GetActorLocation(), ThreatLocation);
+					return DistA < DistB;
+				});
+				
+				// Try to get defenders from pool
 				TArray<AVehicleActor*> Assigned = GetDefenders(StillNeeded);
 				Threat.DefendersAssigned += Assigned.Num();
 				
@@ -1407,25 +1408,26 @@ void AAITeamController::ExecuteIncomeLayer()
 	{
 		TERRITORY_RADIUS = GameMode->TERRITORY_RADIUS;
 	}
-	// P2.1 Easy Income radius: Territory radius * P2_1_RangeMultiplier (personality-based)
-	const float EASY_INCOME_RADIUS = TERRITORY_RADIUS * P2_1_RangeMultiplier;
+
+	// Get all controlled cities (needed for city-count radius scaling)
+	TArray<ACityActor*> Cities = GetControlledCities();
+	if (Cities.Num() == 0) return;
+
+	// P2.1 Easy Income radius: Territory radius * P2_1_RangeMultiplier * NumCities
+	// Each additional city doubles the search area to match the growing income requirement
+	const int32 NumCities = Cities.Num();
+	const float EASY_INCOME_RADIUS = TERRITORY_RADIUS * P2_1_RangeMultiplier * NumCities;
+	CachedEasyIncomeRadius = EASY_INCOME_RADIUS;
 	
 	// P2.3 Mine Attack radius: Same as easy income
 	const float MINE_ATTACK_RADIUS = EASY_INCOME_RADIUS;
-	
-	// Get all controlled cities and vehicles
-	TArray<ACityActor*> Cities = GetControlledCities();
-	if (Cities.Num() == 0) return;
 	
 	TArray<AVehicleActor*> AllVehicles = GetControlledVehicles();
 	if (AllVehicles.Num() == 0) return;
 	
 	// Get all resources and mines
-	TArray<AActor*> AllResourceActors;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResourceActors);
-	
-	TArray<AActor*> AllMineActors;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMineActor::StaticClass(), AllMineActors);
+	const TArray<AActor*>& AllResourceActors = CachedAllResources;
+	const TArray<AActor*>& AllMineActors = CachedAllMines;
 	
 	// Helper lambda to find closest city distance
 	auto GetClosestCityDistance = [&](FVector Location) -> float
@@ -1488,6 +1490,20 @@ void AAITeamController::ExecuteIncomeLayer()
 		}
 		return false;
 	};
+	
+	// ========== HUD DEBUG CACHE: Count all resources in this AI's zone ==========
+	CachedTotalResourcesInZone = 0;
+	CachedUnclaimedResourcesInZone = 0;
+	for (AActor* Actor : AllResourceActors)
+	{
+		AResourceActor* Res = Cast<AResourceActor>(Actor);
+		if (!Res) continue;
+		if (GetClosestCityDistance(Res->GetActorLocation()) <= EASY_INCOME_RADIUS)
+		{
+			CachedTotalResourcesInZone++;
+			if (Res->OwnerTeam == EOwnerTeam::Neutral) CachedUnclaimedResourcesInZone++;
+		}
+	}
 	
 	// ========== RADIUS COMPLETION CHECKS: Release vehicles from completed radius tasks ==========
 	// These checks run FIRST so vehicles can be freed before being collected as idle
@@ -1715,7 +1731,7 @@ void AAITeamController::ExecuteIncomeLayer()
 	
 	// ========== P2.3 MINE ATTACK: Destroy enemy mines within search radius (sorted by closest) ==========
 	// Only attack mines if we need that resource type to reach income threshold (personality-based)
-	int32 NumCities = MyCityStates.Num();
+	// NumCities is already defined above (used for radius scaling)
 	if (NumCities == 0) return; // No cities, can't expand
 	
 	int32 RequiredOrangeIncome = FMath::RoundToInt(NumCities * 100.0f * P2_3_IncomeMultiplier);
@@ -1727,10 +1743,16 @@ void AAITeamController::ExecuteIncomeLayer()
 	// Skip if both income requirements are met
 	if (!bNeedOrangeIncome && !bNeedBlackIncome)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("AI Team %d: P2.3 Mine Attack - Skipping (income satisfied: Orange:%d/%d Black:%d/%d)"),
+		UE_LOG(LogTemp, Log, TEXT("AI Team %d: P2.3 Mine Attack - SKIPPED (income satisfied: Orange:%d/%d Black:%d/%d)"),
 			(int32)ControlledTeam, OrangeIncomePerCycle, RequiredOrangeIncome, BlackIncomePerCycle, RequiredBlackIncome);
 		return;
 	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("AI Team %d: P2.3 Mine Attack - ACTIVE (need income: Orange:%d/%d=%s Black:%d/%d=%s, IdleVehicles:%d)"),
+		(int32)ControlledTeam, 
+		OrangeIncomePerCycle, RequiredOrangeIncome, bNeedOrangeIncome ? TEXT("YES") : TEXT("NO"),
+		BlackIncomePerCycle, RequiredBlackIncome, bNeedBlackIncome ? TEXT("YES") : TEXT("NO"),
+		IdleVehicles.Num());
 	
 	// Attack mines from hostile/neutral relationship teams (relationship <= 0.0)
 	TArray<TPair<float, AMineActor*>> EnemyMines;
@@ -1754,6 +1776,8 @@ void AAITeamController::ExecuteIncomeLayer()
 		// Filter by resource type: only attack mines on resources we need
 		if (Mine->TargetResource)
 		{
+			// Never target green substrate mines via income logic (AI has no green income need)
+			if (Mine->TargetResource->ResourceType == EResourceType::GreenSubstrate) continue;
 			if (Mine->TargetResource->ResourceType == EResourceType::OrangeSubstrate && !bNeedOrangeIncome) continue;
 			if (Mine->TargetResource->ResourceType == EResourceType::BlackSubstrate && !bNeedBlackIncome) continue;
 			
@@ -1776,11 +1800,27 @@ void AAITeamController::ExecuteIncomeLayer()
 	EnemyMines.Sort([](const TPair<float, AMineActor*>& A, const TPair<float, AMineActor*>& B) {
 		return A.Key < B.Key;
 	});
+
+	// Cache for HUD debug display
+	CachedP23EnemyMines.Reset();
+	for (const TPair<float, AMineActor*>& Pair : EnemyMines)
+		CachedP23EnemyMines.Add(Pair.Value);
+	
+	if (EnemyMines.Num() == 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("AI Team %d: P2.3 Mine Attack - No valid enemy mines found within radius %.0f"),
+			(int32)ControlledTeam, MINE_ATTACK_RADIUS);
+		return;
+	}
+	
+	UE_LOG(LogTemp, Warning, TEXT("AI Team %d: P2.3 Mine Attack - Found %d valid enemy mines to attack"),
+		(int32)ControlledTeam, EnemyMines.Num());
 	
 	// Assign mine attack tasks
+	int32 AssignedCount = 0;
 	for (const TPair<float, AMineActor*>& Pair : EnemyMines)
 	{
-		if (IdleVehicles.Num() == 0) return;
+		if (IdleVehicles.Num() == 0) break;
 		
 		AMineActor* Mine = Pair.Value;
 		float DistToCity = Pair.Key;
@@ -1810,12 +1850,19 @@ void AAITeamController::ExecuteIncomeLayer()
 		Task.AssigningController = this;
 		
 		Vehicle->AssignTask(Task);
+		AssignedCount++;
 		
 		FString ResourceTypeName = (Mine->TargetResource && Mine->TargetResource->ResourceType == EResourceType::OrangeSubstrate) 
 			? TEXT("Orange") : TEXT("Black");
 		
 		UE_LOG(LogTemp, Warning, TEXT("AI Team %d: P2.3 Mine Attack - Destroying %s mine from Team %d at %s (%.0f from city, relationship:%.1f)"),
 			(int32)ControlledTeam, *ResourceTypeName, (int32)Mine->OwnerTeam, *Mine->GetName(), DistToCity, Relationship);
+	}
+	
+	if (AssignedCount == 0 && EnemyMines.Num() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("AI Team %d: P2.3 Mine Attack - No vehicles assigned (had %d mines, %d idle vehicles)"),
+			(int32)ControlledTeam, EnemyMines.Num(), IdleVehicles.Num());
 	}
 	
 	// ========== P2.4 KAIJU CLUSTERS: Capture Kaiju-guarded unclaimed resources (sorted by closest) ==========
@@ -1896,8 +1943,7 @@ void AAITeamController::ExecuteIncomeLayer()
 void AAITeamController::OnCityCountChanged()
 {
 	// Count current cities to determine new substrate requirements
-	TArray<AActor*> AllCities;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), AllCities);
+	const TArray<AActor*>& AllCities = CachedAllCities;
 	
 	int32 CityCount = 0;
 	for (AActor* Actor : AllCities)
@@ -1956,8 +2002,7 @@ void AAITeamController::ExecuteDefenseLayer()
 		int32 HostileVehiclesNearby = 0;
 		
 		// Count enemy vehicles from teams with relationship <= -20 within 25000 units
-		TArray<AActor*> AllVehicleActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicleActors);
+		const TArray<AActor*>& AllVehicleActors = CachedAllVehicles;
 		
 		for (AActor* Actor : AllVehicleActors)
 		{
@@ -2018,10 +2063,9 @@ void AAITeamController::ExecuteDefenseLayer()
 		int32 HostileVehiclesNearby = 0;
 		
 		// Count enemy vehicles from teams with relationship <= -20 within 25000 units
-		TArray<AActor*> AllVehicleActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicleActors);
+		const TArray<AActor*>& AllVehicleActors2 = CachedAllVehicles;
 		
-		for (AActor* Actor : AllVehicleActors)
+		for (AActor* Actor : AllVehicleActors2)
 		{
 			AVehicleActor* EnemyVehicle = Cast<AVehicleActor>(Actor);
 			if (!EnemyVehicle || EnemyVehicle->OwnerTeam == ControlledTeam) continue;
@@ -2341,6 +2385,14 @@ bool AAITeamController::RequestAlliance(EOwnerTeam TargetTeam, EOwnerTeam Common
 	// Special case: Requesting alliance from Player
 	if (TargetTeam == EOwnerTeam::Player)
 	{
+		// Skip if player has no cities
+		bool bPlayerHasCities = false;
+		for (const FOpponentGlobalState& State : OpponentStates)
+		{
+			if (State.Team == EOwnerTeam::Player) { bPlayerHasCities = true; break; }
+		}
+		if (!bPlayerHasCities) return false;
+
 		APlanetConquestGameMode* GameMode = Cast<APlanetConquestGameMode>(GetWorld()->GetAuthGameMode());
 		if (!GameMode)
 		{
@@ -2357,6 +2409,40 @@ bool AAITeamController::RequestAlliance(EOwnerTeam TargetTeam, EOwnerTeam Common
 			return false;
 		}
 		
+		// Don't request if the Player's alliance contains a team we're on bad terms with,
+		// or if our alliance contains a team the Player is on bad terms with.
+		FString PlayerAllianceName = GameMode->GetTeamAllianceName(EOwnerTeam::Player);
+		if (!PlayerAllianceName.IsEmpty())
+		{
+			TSet<EOwnerTeam> PlayerAllianceMembers = GameMode->GetAllTeamsInAlliance(PlayerAllianceName);
+			for (EOwnerTeam Member : PlayerAllianceMembers)
+			{
+				if (Member == EOwnerTeam::Player || Member == ControlledTeam) continue;
+				float RelToMember = GameMode->GetDisposition(ControlledTeam, Member);
+				if (RelToMember <= -50.0f)
+				{
+					UE_LOG(LogTemp, Log, TEXT("AI Team %d: Skipping alliance request to Player — bad terms with their ally Team %d (%.1f)"),
+						(int32)ControlledTeam, (int32)Member, RelToMember);
+					return false;
+				}
+			}
+		}
+		if (!AllianceState.AllianceName.IsEmpty())
+		{
+			TSet<EOwnerTeam> OurAllianceMembers = GameMode->GetAllTeamsInAlliance(AllianceState.AllianceName);
+			for (EOwnerTeam Member : OurAllianceMembers)
+			{
+				if (Member == ControlledTeam || Member == EOwnerTeam::Player) continue;
+				float PlayerRelToMember = GameMode->GetDisposition(EOwnerTeam::Player, Member);
+				if (PlayerRelToMember <= -50.0f)
+				{
+					UE_LOG(LogTemp, Log, TEXT("AI Team %d: Skipping alliance request to Player — their bad terms with our ally Team %d (%.1f)"),
+						(int32)ControlledTeam, (int32)Member, PlayerRelToMember);
+					return false;
+				}
+			}
+		}
+
 		// Queue alliance request for player to respond via dialogue UI
 		GameMode->QueueAIAllianceRequest(ControlledTeam, CommonEnemy);
 		
@@ -2371,26 +2457,57 @@ bool AAITeamController::RequestAlliance(EOwnerTeam TargetTeam, EOwnerTeam Common
 	
 	// AI-to-AI alliance request
 	// Find the other team's AI controller
-	TArray<AActor*> FoundControllers;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AAITeamController::StaticClass(), FoundControllers);
+	const TArray<AActor*>& FoundControllers = CachedAllAIControllers;
 	
 	for (AActor* Actor : FoundControllers)
 	{
 		AAITeamController* OtherController = Cast<AAITeamController>(Actor);
 		if (OtherController && OtherController->ControlledTeam == TargetTeam)
 		{
+			APlanetConquestGameMode* GameMode = Cast<APlanetConquestGameMode>(GetWorld()->GetAuthGameMode());
+			if (!GameMode) return false;
+
+			// Don't request if the target's alliance contains a team we're on bad terms with,
+			// or our alliance contains a team the target is on bad terms with.
+			FString TargetAllianceName = GameMode->GetTeamAllianceName(TargetTeam);
+			if (!TargetAllianceName.IsEmpty())
+			{
+				TSet<EOwnerTeam> TargetAllianceMembers = GameMode->GetAllTeamsInAlliance(TargetAllianceName);
+				for (EOwnerTeam Member : TargetAllianceMembers)
+				{
+					if (Member == TargetTeam || Member == ControlledTeam) continue;
+					float RelToMember = GameMode->GetDisposition(ControlledTeam, Member);
+					if (RelToMember <= -50.0f)
+					{
+						UE_LOG(LogTemp, Log, TEXT("AI Team %d: Skipping alliance request to Team %d — bad terms with their ally Team %d (%.1f)"),
+							(int32)ControlledTeam, (int32)TargetTeam, (int32)Member, RelToMember);
+						AllianceState.LastAllianceRequestCycle.Add(TargetTeam, CurrentDecisionCycle);
+						return false;
+					}
+				}
+			}
+			if (!AllianceState.AllianceName.IsEmpty())
+			{
+				TSet<EOwnerTeam> OurAllianceMembers = GameMode->GetAllTeamsInAlliance(AllianceState.AllianceName);
+				for (EOwnerTeam Member : OurAllianceMembers)
+				{
+					if (Member == ControlledTeam || Member == TargetTeam) continue;
+					float TargetRelToMember = GameMode->GetDisposition(TargetTeam, Member);
+					if (TargetRelToMember <= -50.0f)
+					{
+						UE_LOG(LogTemp, Log, TEXT("AI Team %d: Skipping alliance request to Team %d — their bad terms with our ally Team %d (%.1f)"),
+							(int32)ControlledTeam, (int32)TargetTeam, (int32)Member, TargetRelToMember);
+						AllianceState.LastAllianceRequestCycle.Add(TargetTeam, CurrentDecisionCycle);
+						return false;
+					}
+				}
+			}
+
 			// Ask them to evaluate our alliance request
 			bool bAccepted = OtherController->EvaluateAllianceRequest(ControlledTeam, CommonEnemy);
 			
 			if (bAccepted)
 			{
-				APlanetConquestGameMode* GameMode = Cast<APlanetConquestGameMode>(GetWorld()->GetAuthGameMode());
-				if (!GameMode)
-				{
-					UE_LOG(LogTemp, Error, TEXT("AI Team %d: Failed to form alliance - GameMode not found!"), (int32)ControlledTeam);
-					return false;
-				}
-
 				FString AllianceName;
 				
 				// Determine how to form/join alliance using centralized helper functions
@@ -2501,8 +2618,7 @@ bool AAITeamController::EvaluateAllianceRequest(EOwnerTeam RequestingTeam, EOwne
 	
 	// Check if we're enemies with any existing alliance member
 	// Need to find requesting team's controller to check their alliance members
-	TArray<AActor*> FoundControllers;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AAITeamController::StaticClass(), FoundControllers);
+	const TArray<AActor*>& FoundControllers = CachedAllAIControllers;
 	
 	for (AActor* Actor : FoundControllers)
 	{
@@ -2540,16 +2656,26 @@ TArray<EOwnerTeam> AAITeamController::FindPotentialAllies(EOwnerTeam CommonEnemy
 	// Check Player as potential ally
 	if (CommonEnemy != EOwnerTeam::Player)
 	{
-		// Check if we have +20 or greater relationship with the player
-		float OurRelationshipWithPlayer = GameMode->GetDisposition(ControlledTeam, EOwnerTeam::Player);
-		if (OurRelationshipWithPlayer >= 20.0f)
+		// Only consider player if they have at least one city (present in OpponentStates)
+		bool bPlayerHasCities = false;
+		for (const FOpponentGlobalState& State : OpponentStates)
 		{
-			// Check if player hates the common enemy (-40 or worse)
-			float PlayerRelationshipWithEnemy = GameMode->GetDisposition(EOwnerTeam::Player, CommonEnemy);
-			if (PlayerRelationshipWithEnemy <= -40.0f)
+			if (State.Team == EOwnerTeam::Player) { bPlayerHasCities = true; break; }
+		}
+
+		if (bPlayerHasCities)
+		{
+			// Check if we have +20 or greater relationship with the player
+			float OurRelationshipWithPlayer = GameMode->GetDisposition(ControlledTeam, EOwnerTeam::Player);
+			if (OurRelationshipWithPlayer >= 20.0f)
 			{
-				// Player is a potential ally
-				PotentialAllies.Add(EOwnerTeam::Player);
+				// Check if player hates the common enemy (-40 or worse)
+				float PlayerRelationshipWithEnemy = GameMode->GetDisposition(EOwnerTeam::Player, CommonEnemy);
+				if (PlayerRelationshipWithEnemy <= -40.0f)
+				{
+					// Player is a potential ally
+					PotentialAllies.Add(EOwnerTeam::Player);
+				}
 			}
 		}
 	}
@@ -2579,8 +2705,7 @@ bool AAITeamController::ProposeJointAttack(ACityActor* TargetCity, EOwnerTeam Al
 	if (!TargetCity) return false;
 	
 	// Find ally's controller
-	TArray<AActor*> FoundControllers;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AAITeamController::StaticClass(), FoundControllers);
+	const TArray<AActor*>& FoundControllers = CachedAllAIControllers;
 	
 	for (AActor* Actor : FoundControllers)
 	{
@@ -2874,6 +2999,36 @@ void AAITeamController::ExecuteWarLayer()
 	// Reserve black substrate for war stockpile
 	ReservedBlackSubstrate = FMath::Max(ReservedBlackSubstrate, WAR_STOCKPILE_BS);
 	
+	// Pre-select a tentative target to know which of our cities to build from.
+	// Uses the same scoring as STEP 3 — closest city to the best-scoring target is the staging base.
+	ACityActor* StagingCity = MyCityStates[0].City;
+	{
+		float BestPreScore = FLT_MAX;
+		for (const FOpponentGlobalState& OpponentState : OpponentStates)
+		{
+			float Relationship = GameMode->GetDisposition(ControlledTeam, OpponentState.Team);
+			if (Relationship > -50.0f) continue;
+			for (const FOpponentCityState& OpponentCity : OpponentState.Cities)
+			{
+				if (!OpponentCity.City || !IsValid(OpponentCity.City)) continue;
+				float ClosestDist = FLT_MAX;
+				ACityActor* ClosestCity = nullptr;
+				for (const FMyCityState& MyCity : MyCityStates)
+				{
+					if (!MyCity.City) continue;
+					float D = FVector::Dist(MyCity.City->GetActorLocation(), OpponentCity.City->GetActorLocation());
+					if (D < ClosestDist) { ClosestDist = D; ClosestCity = MyCity.City; }
+				}
+				if (!ClosestCity) continue;
+				int32 TurretCount = 0;
+				for (ABuildingActor* Building : OpponentCity.City->Buildings)
+					if (Cast<ATurretBuildingActor>(Building) && Building->CurrentHealth > 0) TurretCount++;
+				float Score = (ClosestDist / 100000.0f * 2.0f) + ((100.0f + Relationship) / 100.0f * 1.5f) + FMath::Min(TurretCount / 8.0f, 1.0f);
+				if (Score < BestPreScore) { BestPreScore = Score; StagingCity = ClosestCity; }
+			}
+		}
+	}
+
 	// STEP 1: Build/recruit war party vehicles
 	// Count vehicles available for war (idle + can build)
 	int32 AvailableForWar = IdleVehicles.Num();
@@ -2891,7 +3046,7 @@ void AAITeamController::ExecuteWarLayer()
 		// Build more vehicles if we have resources
 		while (VehiclesNeeded > 0 && OrangeSubstrate >= VEHICLE_COST)
 		{
-			ACityActor* BuildCity = MyCityStates[0].City;
+			ACityActor* BuildCity = StagingCity;
 			if (BuildCity && BuildVehicleAtCity(BuildCity))
 			{
 				VehiclesNeeded--;
@@ -2923,7 +3078,7 @@ void AAITeamController::ExecuteWarLayer()
 				// Try building war vehicles again after trade
 				while (VehiclesNeeded > 0 && OrangeSubstrate >= VEHICLE_COST)
 				{
-					ACityActor* BuildCity = MyCityStates[0].City;
+					ACityActor* BuildCity = StagingCity;
 					if (BuildCity && BuildVehicleAtCity(BuildCity))
 					{
 						VehiclesNeeded--;
@@ -2987,6 +3142,7 @@ void AAITeamController::ExecuteWarLayer()
 	struct FWarTarget
 	{
 		ACityActor* City;
+		ACityActor* ClosestMyCity = nullptr; // Our city closest to this target — staging base
 		EOwnerTeam Team;
 		float Distance;
 		float Relationship;
@@ -2995,7 +3151,6 @@ void AAITeamController::ExecuteWarLayer()
 	};
 	
 	TArray<FWarTarget> PotentialTargets;
-	FVector LaunchCityLocation = MyCityStates[0].City->GetActorLocation();
 	
 	for (const FOpponentGlobalState& OpponentState : OpponentStates)
 	{
@@ -3008,10 +3163,21 @@ void AAITeamController::ExecuteWarLayer()
 		{
 			if (!OpponentCity.City || !IsValid(OpponentCity.City)) continue;
 			
+			// Find which of our cities is closest to this target — that's the staging base
+			ACityActor* NearestMyCity = MyCityStates[0].City;
+			float NearestDist = FLT_MAX;
+			for (const FMyCityState& MyCity : MyCityStates)
+			{
+				if (!MyCity.City) continue;
+				float D = FVector::Dist(MyCity.City->GetActorLocation(), OpponentCity.City->GetActorLocation());
+				if (D < NearestDist) { NearestDist = D; NearestMyCity = MyCity.City; }
+			}
+			
 			FWarTarget Target;
 			Target.City = OpponentCity.City;
+			Target.ClosestMyCity = NearestMyCity;
 			Target.Team = OpponentState.Team;
-			Target.Distance = FVector::Dist(LaunchCityLocation, OpponentCity.City->GetActorLocation());
+			Target.Distance = NearestDist;
 			Target.Relationship = Relationship;
 			
 			// Count turrets in this city
@@ -3056,7 +3222,10 @@ void AAITeamController::ExecuteWarLayer()
 		BestTarget.Distance, BestTarget.Relationship, BestTarget.TurretCount, BestTarget.Score);
 	
 	// STEP 4: Calculate rally point (edge of territory toward target)
-	FVector OurCityLocation = MyCityStates[0].City->GetActorLocation();
+	// Launch from our city that is closest to the target — already stored in BestTarget.ClosestMyCity
+	FVector OurCityLocation = (BestTarget.ClosestMyCity && IsValid(BestTarget.ClosestMyCity))
+		? BestTarget.ClosestMyCity->GetActorLocation()
+		: MyCityStates[0].City->GetActorLocation();
 	FVector TargetDirection = (BestTarget.City->GetActorLocation() - OurCityLocation).GetSafeNormal();
 	
 	// Project onto planet surface
@@ -3154,9 +3323,7 @@ void AAITeamController::ExecuteAidLayer()
 		{
 			// Check for remaining attackers at ally city
 			TArray<AVehicleActor*> RemainingAttackers;
-			TArray<AActor*> AllVehicles;
-			UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllVehicles);
-			
+		const TArray<AActor*>& AllVehicles = CachedAllVehicles;
 			float TerritoryRadius = 5000.0f;
 			for (AActor* Actor : AllVehicles)
 			{
@@ -3279,7 +3446,16 @@ bool AAITeamController::BuildVehicleAtCity(ACityActor* City, int32 Priority)
 	
 	// Calculate spawn position on planet surface
 	FVector SpawnDirection = (CityDirection * PlanetRadius + RandomOffset).GetSafeNormal();
-	FVector SpawnLocation = PlanetCenter + SpawnDirection * PlanetRadius;
+	
+	// Get actual terrain height at spawn location (same as CityActor does)
+	float ActualTerrainRadius = PlanetRadius; // Default fallback
+	if (City && City->OwningPlanet)
+	{
+		float TerrainHeight = City->OwningPlanet->CalculateHeightAtPoint(SpawnDirection);
+		ActualTerrainRadius = City->OwningPlanet->PlanetRadius * (1.0f + TerrainHeight);
+	}
+	
+	FVector SpawnLocation = PlanetCenter + SpawnDirection * ActualTerrainRadius;
 	
 	// Spawn the vehicle
 	FActorSpawnParameters SpawnParams;
@@ -3336,36 +3512,38 @@ bool AAITeamController::BuildVehicleAtCity(ACityActor* City, int32 Priority)
 TArray<ACityActor*> AAITeamController::GetControlledCities() const
 {
 	TArray<ACityActor*> ControlledCities;
-	TArray<AActor*> FoundCities;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), FoundCities);
-	
-	for (AActor* Actor : FoundCities)
+	TArray<AActor*> FreshCities;
+	const TArray<AActor*>* Source = &CachedAllCities;
+	if (CachedAllCities.Num() == 0)
+	{
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), FreshCities);
+		Source = &FreshCities;
+	}
+	for (AActor* Actor : *Source)
 	{
 		ACityActor* City = Cast<ACityActor>(Actor);
 		if (City && City->OwnerTeam == ControlledTeam)
-		{
 			ControlledCities.Add(City);
-		}
 	}
-	
 	return ControlledCities;
 }
 
 TArray<AVehicleActor*> AAITeamController::GetControlledVehicles()
 {
 	TArray<AVehicleActor*> ControlledVehicles;
-	TArray<AActor*> FoundVehicles;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), FoundVehicles);
-	
-	for (AActor* Actor : FoundVehicles)
+	const TArray<AActor*>* SourcePtr = CachedAllVehicles.Num() > 0 ? &CachedAllVehicles : nullptr;
+	TArray<AActor*> FreshVehicles;
+	if (!SourcePtr)
+	{
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), FreshVehicles);
+		SourcePtr = &FreshVehicles;
+	}
+	for (AActor* Actor : *SourcePtr)
 	{
 		AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
 		if (Vehicle && Vehicle->OwnerTeam == ControlledTeam)
-		{
 			ControlledVehicles.Add(Vehicle);
-		}
 	}
-	
 	return ControlledVehicles;
 }
 
@@ -3383,8 +3561,7 @@ bool AAITeamController::IsClusterSafeFromKaiju(AResourceActor* Resource)
 	if (!World) return true;
 	
 	// Find all resources in this cluster to calculate cluster center
-	TArray<AActor*> AllResourceActors;
-	UGameplayStatics::GetAllActorsOfClass(World, AResourceActor::StaticClass(), AllResourceActors);
+	const TArray<AActor*>& AllResourceActors = CachedAllResources;
 	
 	FVector ClusterCenter = FVector::ZeroVector;
 	int32 ClusterResourceCount = 0;
@@ -3404,8 +3581,7 @@ bool AAITeamController::IsClusterSafeFromKaiju(AResourceActor* Resource)
 	ClusterCenter /= ClusterResourceCount; // Average location = cluster center
 	
 	// Check if any living Kaiju is within safety distance of this cluster center
-	TArray<AActor*> AllKaijus;
-	UGameplayStatics::GetAllActorsOfClass(World, AKaijuActor::StaticClass(), AllKaijus);
+	const TArray<AActor*>& AllKaijus = CachedAllKaiju;
 	
 	for (AActor* Actor : AllKaijus)
 	{
@@ -3523,6 +3699,14 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		//	(int32)ControlledTeam, RequestAmount, bRequestingOrange ? TEXT("orange") : TEXT("black"), RequiredIncome);
 		
 		int32 PartnersWithInsufficientSupply = 0;
+
+		// Build set of continent IDs this team has access to (owns at least one city there)
+		TSet<int32> OurContinents;
+		for (const FMyCityState& MyCity : MyCityStates)
+		{
+			if (MyCity.City && IsValid(MyCity.City) && MyCity.City->ContinentID >= 0)
+				OurContinents.Add(MyCity.City->ContinentID);
+		}
 		
 		for (AAITeamController* Partner : AllAIControllers)
 		{
@@ -3546,7 +3730,26 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 				//	(int32)Partner->ControlledTeam, Disposition);
 				continue;
 			}
-			
+
+			// Continent filter: only trade with partners that share at least one continent with us
+			if (OurContinents.Num() > 0)
+			{
+				bool bSharesContinent = false;
+				for (AActor* Actor : CachedAllCities)
+				{
+					ACityActor* City = Cast<ACityActor>(Actor);
+					if (City && City->OwnerTeam == Partner->ControlledTeam && City->ContinentID >= 0)
+					{
+						if (OurContinents.Contains(City->ContinentID))
+						{
+							bSharesContinent = true;
+							break;
+						}
+					}
+				}
+				if (!bSharesContinent) continue;
+			}
+
 			// Check if partner has good income of requested substrate (use member variables)
 			int32 PartnerIncome = bRequestingOrange ? Partner->OrangeIncomePerCycle : Partner->BlackIncomePerCycle;
 			if (PartnerIncome < RequiredIncome)
@@ -3563,8 +3766,7 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 				if (!MyCity.City || !IsValid(MyCity.City)) continue;
 				
 				// Find partner's cities
-				TArray<AActor*> FoundCities;
-				UGameplayStatics::GetAllActorsOfClass(World, ACityActor::StaticClass(), FoundCities);
+				const TArray<AActor*>& FoundCities = CachedAllCities;
 				for (AActor* Actor : FoundCities)
 				{
 					ACityActor* City = Cast<ACityActor>(Actor);
@@ -3743,8 +3945,8 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		}
 		
 		// No AI partner accepted our offer - try the PLAYER as last resort
-		UE_LOG(LogTemp, Log, TEXT("AI Team %d: No AI partners available, attempting trade with PLAYER..."),
-			(int32)ControlledTeam);
+		//UE_LOG(LogTemp, Log, TEXT("AI Team %d: No AI partners available, attempting trade with PLAYER..."),
+		//	(int32)ControlledTeam);
 		
 		// Check cooldown with player (40 cycles)
 		if (LastTradeRequestCycle.Contains(EOwnerTeam::Player))
@@ -3752,8 +3954,8 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 			int32 LastRequest = LastTradeRequestCycle[EOwnerTeam::Player];
 			if (CurrentDecisionCycle - LastRequest < 40)
 			{
-				UE_LOG(LogTemp, Log, TEXT("  - Player: On cooldown (%d cycles since last trade)"),
-					CurrentDecisionCycle - LastRequest);
+				//UE_LOG(LogTemp, Log, TEXT("  - Player: On cooldown (%d cycles since last trade)"),
+				//	CurrentDecisionCycle - LastRequest);
 				return false; // Player on cooldown
 			}
 		}
@@ -3762,7 +3964,7 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		float PlayerDisposition = GameMode->GetDisposition(ControlledTeam, EOwnerTeam::Player);
 		if (PlayerDisposition < 0.0f)
 		{
-			UE_LOG(LogTemp, Log, TEXT("  - Player: Hostile relationship (%.1f)"), PlayerDisposition);
+			//UE_LOG(LogTemp, Log, TEXT("  - Player: Hostile relationship (%.1f)"), PlayerDisposition);
 			return false; // Hostile to player
 		}
 		
@@ -3771,8 +3973,8 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		int32 MyOfferingIncome = bRequestingOrange ? BlackIncomePerCycle : OrangeIncomePerCycle;
 		if (MyOfferingIncome < RequiredPlayerIncome)
 		{
-			UE_LOG(LogTemp, Log, TEXT("  - Player: Insufficient income of offering substrate (%d < %d)"),
-				MyOfferingIncome, RequiredPlayerIncome);
+			//UE_LOG(LogTemp, Log, TEXT("  - Player: Insufficient income of offering substrate (%d < %d)"),
+			//	MyOfferingIncome, RequiredPlayerIncome);
 			return false; // Don't spam player if we can't sustain good income
 		}
 		
@@ -3780,7 +3982,7 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		APlanetConquestPlayerController* PlayerController = Cast<APlanetConquestPlayerController>(World->GetFirstPlayerController());
 		if (!PlayerController)
 		{
-			UE_LOG(LogTemp, Error, TEXT("  - Player: Could not find player controller!"));
+			//UE_LOG(LogTemp, Error, TEXT("  - Player: Could not find player controller!"));
 			return false;
 		}
 		
@@ -3788,8 +3990,8 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		int32 PlayerIncome = bRequestingOrange ? PlayerController->PlayerOrangeIncomePerCycle : PlayerController->PlayerBlackIncomePerCycle;
 		if (PlayerIncome < RequiredPlayerIncome)
 		{
-			UE_LOG(LogTemp, Log, TEXT("  - Player: Insufficient income of requested substrate (%d < %d)"),
-				PlayerIncome, RequiredPlayerIncome);
+			//UE_LOG(LogTemp, Log, TEXT("  - Player: Insufficient income of requested substrate (%d < %d)"),
+			//	PlayerIncome, RequiredPlayerIncome);
 			return false; // Player can't sustain this income level
 		}
 		
@@ -3797,7 +3999,7 @@ bool AAITeamController::RequestTradeFromAI(bool bRequestingOrange, int32 AmountN
 		int32 PlayerSupply = bRequestingOrange ? PlayerController->PlayerOrangeSubstrate : PlayerController->PlayerBlackSubstrate;
 		if (PlayerSupply < RequestAmount)
 		{
-			UE_LOG(LogTemp, Log, TEXT("  - Player: Insufficient supply (%d < %d)"), PlayerSupply, RequestAmount);
+			//UE_LOG(LogTemp, Log, TEXT("  - Player: Insufficient supply (%d < %d)"), PlayerSupply, RequestAmount);
 			return false; // Player doesn't have enough
 		}
 		
@@ -3940,8 +4142,7 @@ void AAITeamController::CollectIncome()
 	if (!GetWorld()) return;
 	
 	// Find all cities in the world
-	TArray<AActor*> FoundCities;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), FoundCities);
+	const TArray<AActor*>& FoundCities = CachedAllCities;
 	
 	// Initialize each controlled city's green substrate to base value (100 from capital)
 	for (AActor* Actor : FoundCities)
@@ -3956,8 +4157,7 @@ void AAITeamController::CollectIncome()
 	}
 	
 	// Find all resources in the world
-	TArray<AActor*> FoundResources;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), FoundResources);
+	const TArray<AActor*>& FoundResources = CachedAllResources;
 	
 	int32 OrangeIncome = 0;
 	int32 BlackIncome = 0;
@@ -4007,8 +4207,7 @@ void AAITeamController::CollectIncome()
 	}
 	
 	// Find all buildings (factories)
-	TArray<AActor*> FoundBuildings;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABuildingActor::StaticClass(), FoundBuildings);
+	const TArray<AActor*>& FoundBuildings = CachedAllBuildings;
 	
 	int32 FactoryCount = 0;
 	for (AActor* Actor : FoundBuildings)
@@ -4171,8 +4370,7 @@ bool AAITeamController::RequestAidFromAllies(ACityActor* CityUnderAttack, bool b
 		else
 		{
 			// AI ally - send to their controller
-			TArray<AActor*> FoundControllers;
-			UGameplayStatics::GetAllActorsOfClass(GetWorld(), AAITeamController::StaticClass(), FoundControllers);
+			const TArray<AActor*>& FoundControllers = CachedAllAIControllers;
 			
 			for (AActor* Actor : FoundControllers)
 			{
@@ -4263,8 +4461,7 @@ int32 AAITeamController::SendSubstrateAid(EOwnerTeam AllyTeam, int32 RequestedAm
 	else
 	{
 		// Give to AI ally
-		TArray<AActor*> FoundControllers;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AAITeamController::StaticClass(), FoundControllers);
+		const TArray<AActor*>& FoundControllers = CachedAllAIControllers;
 		
 		for (AActor* Actor : FoundControllers)
 		{
@@ -4317,8 +4514,7 @@ int32 AAITeamController::SendMilitaryAid(EOwnerTeam AllyTeam, ACityActor* AllyCi
 	
 	// Find attackers at ally's city
 	TArray<AVehicleActor*> Attackers;
-	TArray<AActor*> AllEnemyVehicles;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), AllEnemyVehicles);
+	const TArray<AActor*>& AllEnemyVehicles = CachedAllVehicles;
 	
 	float TerritoryRadius = 5000.0f;
 	for (AActor* Actor : AllEnemyVehicles)

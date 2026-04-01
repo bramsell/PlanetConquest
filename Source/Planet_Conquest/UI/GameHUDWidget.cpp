@@ -1,10 +1,11 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "GameHUDWidget.h"
 #include "../Core/PlanetConquestPlayerController.h"
 #include "../Core/PlanetConquestGameMode.h"
 #include "../Core/AITeamController.h"
 #include "../Entities/Resources/ResourceActor.h"
+#include "../Entities/Buildings/MineActor.h"
 #include "../Entities/Cities/CityActor.h"
 #include "../Entities/Vehicles/VehicleActor.h"
 #include "../World/PlanetActor.h"
@@ -94,9 +95,24 @@ void UGameHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	
-	// Auto-refresh display every frame
+	// Auto-refresh display every frame (reads PlayerController props — no world traversal)
 	RefreshFromPlayerController();
-	UpdateAlliancesDisplay();
+
+	// Refresh C++ actor caches every 2s for Blueprint use and for UpdateAlliancesDisplay
+	HUDActorCacheTimer += InDeltaTime;
+	if (HUDActorCacheTimer >= 2.0f)
+	{
+		HUDActorCacheTimer = FMath::FRandRange(0.0f, 0.3f);
+		RefreshHUDActorCaches();
+	}
+
+	// Throttle alliance panel rebuilds to every 5s (eliminates per-frame NewObject<UTextBlock> costs)
+	AlliancesUpdateTimer += InDeltaTime;
+	if (AlliancesUpdateTimer >= 5.0f)
+	{
+		AlliancesUpdateTimer = 0.0f;
+		UpdateAlliancesDisplay();
+	}
 	
 	// Update minimap city markers
 	if (MinimapCanvas && PlanetActorRef)
@@ -292,6 +308,17 @@ void UGameHUDWidget::UpdateAlliancesDisplay()
 			case EOwnerTeam::AI6:       return FLinearColor(0.1f, 0.1f, 0.1f); // Dark gray (black is too dark)
 			case EOwnerTeam::AI7:       return FLinearColor(0.0f, 0.4f, 1.0f); // Royal blue
 			case EOwnerTeam::AI8:       return FLinearColor::White;
+			case EOwnerTeam::AI9:       return FLinearColor(1.0f, 0.0f, 0.5f);   // Hot pink
+			case EOwnerTeam::AI10:      return FLinearColor(1.0f, 0.55f, 0.0f);  // Orange
+			case EOwnerTeam::AI11:      return FLinearColor(0.0f, 0.7f, 0.5f);   // Teal
+			case EOwnerTeam::AI12:      return FLinearColor(0.5f, 1.0f, 0.0f);   // Lime
+			case EOwnerTeam::AI13:      return FLinearColor(1.0f, 0.0f, 1.0f);   // Magenta
+			case EOwnerTeam::AI14:      return FLinearColor(0.55f, 0.27f, 0.0f); // Bronze
+			case EOwnerTeam::AI15:      return FLinearColor(0.05f, 0.1f, 0.5f);  // Navy
+			case EOwnerTeam::AI16:      return FLinearColor(1.0f, 0.75f, 0.0f);  // Gold
+			case EOwnerTeam::AI17:      return FLinearColor(0.7f, 0.7f, 0.7f);   // Silver
+			case EOwnerTeam::AI18:      return FLinearColor(0.55f, 0.0f, 0.05f); // Crimson
+			case EOwnerTeam::AI19:      return FLinearColor(0.5f, 1.0f, 0.75f);  // Mint
 			default:                    return FLinearColor::Gray;
 		}
 	};
@@ -373,7 +400,7 @@ void UGameHUDWidget::UpdateAlliancesDisplay()
 		Header->SetFont(HeaderFont);
 		UVerticalBoxSlot* HeaderSlot = AlliancesContainer->AddChildToVerticalBox(Header);
 		HeaderSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-		HeaderSlot->SetPadding(FMargin(0, 10, 0, 25));
+		HeaderSlot->SetPadding(FMargin(0, 4, 0, 6));
 		HeaderSlot->SetHorizontalAlignment(HAlign_Left);
 		
 		// Team entries
@@ -412,7 +439,7 @@ void UGameHUDWidget::UpdateAlliancesDisplay()
 			TeamEntry->SetFont(TeamFont);
 			UVerticalBoxSlot* TeamSlot = AlliancesContainer->AddChildToVerticalBox(TeamEntry);
 			TeamSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-			TeamSlot->SetPadding(FMargin(10, 0, 0, 25));
+			TeamSlot->SetPadding(FMargin(10, 0, 0, 2));
 			TeamSlot->SetHorizontalAlignment(HAlign_Left);
 		}
 	}
@@ -428,7 +455,7 @@ void UGameHUDWidget::UpdateAlliancesDisplay()
 		UnalignedHeader->SetFont(UnalignedHeaderFont);
 		UVerticalBoxSlot* UnalignedHeaderSlot = AlliancesContainer->AddChildToVerticalBox(UnalignedHeader);
 		UnalignedHeaderSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-		UnalignedHeaderSlot->SetPadding(FMargin(0, 10, 0, 25));
+		UnalignedHeaderSlot->SetPadding(FMargin(0, 4, 0, 6));
 		UnalignedHeaderSlot->SetHorizontalAlignment(HAlign_Left);
 		
 		for (EOwnerTeam Team : UnalignedTeams)
@@ -466,7 +493,7 @@ void UGameHUDWidget::UpdateAlliancesDisplay()
 			TeamEntry->SetFont(TeamFont);
 			UVerticalBoxSlot* TeamSlot = AlliancesContainer->AddChildToVerticalBox(TeamEntry);
 			TeamSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-			TeamSlot->SetPadding(FMargin(10, 0, 0, 25));
+			TeamSlot->SetPadding(FMargin(10, 0, 0, 2));
 			TeamSlot->SetHorizontalAlignment(HAlign_Left);
 		}
 	}
@@ -706,40 +733,23 @@ void UGameHUDWidget::UpdateAIDebugDisplay()
 	TArray<ACityActor*> AICities = TargetAI->GetControlledCities();
 	if (AICities.Num() > 0)
 	{
-		const float EASY_INCOME_RADIUS = 20000.0f;
-		
-		TArray<AActor*> AllResourceActors;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), AllResourceActors);
-		
-		int32 TotalInZone = 0;
-		int32 UnclaimedInZone = 0;
-		
-		for (AActor* Actor : AllResourceActors)
+		int32 EnemyOrangeInZone = 0;
+		int32 EnemyBlackInZone = 0;
+		for (AMineActor* Mine : TargetAI->CachedP23EnemyMines)
 		{
-			AResourceActor* Resource = Cast<AResourceActor>(Actor);
-			if (!Resource) continue;
-			
-			// Find closest city distance
-			float ClosestDist = FLT_MAX;
-			for (ACityActor* City : AICities)
+			if (Mine && Mine->TargetResource)
 			{
-				float Dist = FVector::Dist(City->GetActorLocation(), Resource->GetActorLocation());
-				if (Dist < ClosestDist) ClosestDist = Dist;
-			}
-			
-			// Count resources in income zone
-			if (ClosestDist <= EASY_INCOME_RADIUS)
-			{
-				TotalInZone++;
-				if (Resource->OwnerTeam == EOwnerTeam::Neutral) UnclaimedInZone++;
+				if (Mine->TargetResource->ResourceType == EResourceType::OrangeSubstrate) EnemyOrangeInZone++;
+				else if (Mine->TargetResource->ResourceType == EResourceType::BlackSubstrate) EnemyBlackInZone++;
 			}
 		}
-		
+
 		// Display zone statistics
 		UTextBlock* ZoneStatsText = NewObject<UTextBlock>(this);
 		ZoneStatsText->SetText(FText::FromString(FString::Printf(
-			TEXT("Zone 0-20k: %d/%d unclaimed/total"),
-			UnclaimedInZone, TotalInZone)));
+			TEXT("Zone 0-%.0fk: %d/%d unclaimed/total"),
+			TargetAI->CachedEasyIncomeRadius / 1000.0f,
+			TargetAI->CachedUnclaimedResourcesInZone, TargetAI->CachedTotalResourcesInZone)));
 		ZoneStatsText->SetColorAndOpacity(FLinearColor(0.7f, 0.9f, 1.0f));  // Light blue
 		FSlateFontInfo ZoneStatsFont = ZoneStatsText->GetFont();
 		ZoneStatsFont.Size = 18;
@@ -748,6 +758,20 @@ void UGameHUDWidget::UpdateAIDebugDisplay()
 		ZoneStatsSlot->SetPadding(FMargin(0, 2, 0, 2));
 		ZoneStatsSlot->SetHorizontalAlignment(HAlign_Left);
 		ZoneStatsSlot->SetVerticalAlignment(VAlign_Top);
+
+		// Display enemy-claimed resources in zone
+		UTextBlock* EnemyZoneText = NewObject<UTextBlock>(this);
+		EnemyZoneText->SetText(FText::FromString(FString::Printf(
+			TEXT("  Enemy mines in zone: %d orange, %d black"),
+			EnemyOrangeInZone, EnemyBlackInZone)));
+		EnemyZoneText->SetColorAndOpacity(FLinearColor(1.0f, 0.5f, 0.5f));  // Soft red
+		FSlateFontInfo EnemyZoneFont = EnemyZoneText->GetFont();
+		EnemyZoneFont.Size = 18;
+		EnemyZoneText->SetFont(EnemyZoneFont);
+		UVerticalBoxSlot* EnemyZoneSlot = AIDebugContainer->AddChildToVerticalBox(EnemyZoneText);
+		EnemyZoneSlot->SetPadding(FMargin(0, 0, 0, 2));
+		EnemyZoneSlot->SetHorizontalAlignment(HAlign_Left);
+		EnemyZoneSlot->SetVerticalAlignment(VAlign_Top);
 	}
 	
 	// Total vehicle count
@@ -809,6 +833,45 @@ void UGameHUDWidget::UpdateAIDebugDisplay()
 			SubPrioritySlot->SetPadding(FMargin(10, 1, 0, 1));
 			SubPrioritySlot->SetHorizontalAlignment(HAlign_Left);
 			SubPrioritySlot->SetVerticalAlignment(VAlign_Top);
+			
+			// Add individual vehicle details for P4 (War) and P5 (Aid) tasks
+			if (i == 3 || i == 4) // P4: War, P5: Aid
+			{
+				for (AVehicleActor* Vehicle : AllVehicles)
+				{
+					if (!Vehicle) continue;
+					
+					EVehicleTaskType TaskType = Vehicle->CurrentTask.Type;
+					int32 TaskPriority = Vehicle->CurrentTask.Priority;
+					bool bIsP4 = (i == 3 && TaskType == EVehicleTaskType::AttackTarget && TaskPriority == 4);
+					bool bIsP5 = (i == 4 && (TaskType == EVehicleTaskType::AidAlly || TaskPriority == 5));
+					
+					if (bIsP4 || bIsP5)
+					{
+						FString CurrentTargetName = Vehicle->CurrentTarget ? Vehicle->CurrentTarget->GetName() : TEXT("None");
+						FString PrimaryTargetName = Vehicle->PrimaryTarget ? Vehicle->PrimaryTarget->GetName() : TEXT("None");
+						int32 PathNodes = Vehicle->CurrentPath.Num();
+						bool bHasTarget = Vehicle->bHasTarget;
+						FString ErrorMsg = Vehicle->LastPathfindingError.IsEmpty() ? TEXT("") : FString::Printf(TEXT(" | ERR:%s"), *Vehicle->LastPathfindingError);
+						
+						UTextBlock* VehicleDetailText = NewObject<UTextBlock>(this);
+						VehicleDetailText->SetText(FText::FromString(FString::Printf(
+							TEXT("    %s | Cur:%s | Pri:%s | Path:%d | Has:%s%s"),
+							*Vehicle->GetName(), *CurrentTargetName, *PrimaryTargetName,
+							PathNodes, bHasTarget ? TEXT("Y") : TEXT("N"), *ErrorMsg)));
+						
+						FLinearColor TextColor = bHasTarget ? FLinearColor(0.6f, 0.9f, 0.6f) : FLinearColor(0.9f, 0.4f, 0.4f);
+						VehicleDetailText->SetColorAndOpacity(TextColor);
+						FSlateFontInfo VehicleFont = VehicleDetailText->GetFont();
+						VehicleFont.Size = 16;
+						VehicleDetailText->SetFont(VehicleFont);
+						UVerticalBoxSlot* VehicleSlot = AIDebugContainer->AddChildToVerticalBox(VehicleDetailText);
+						VehicleSlot->SetPadding(FMargin(20, 0, 0, 0));
+						VehicleSlot->SetHorizontalAlignment(HAlign_Left);
+						VehicleSlot->SetVerticalAlignment(VAlign_Top);
+					}
+				}
+			}
 		}
 	}
 	
@@ -937,4 +1000,76 @@ Brush.ImageSize = FVector2D(12.0f, 12.0f);
 		CityMarkers.Remove(Key);
 		UE_LOG(LogTemp, Log, TEXT("Removed marker for destroyed city"));
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Debug team cycling helpers
+// ---------------------------------------------------------------------------
+
+// Build a sorted list of team indices that have a live AAITeamController actor.
+static TArray<int32> GetActiveAITeamIndices(UWorld* World)
+{
+	TArray<int32> Indices;
+	for (TActorIterator<AAITeamController> It(World); It; ++It)
+	{
+		if (*It)
+		{
+			Indices.AddUnique(static_cast<int32>((*It)->ControlledTeam));
+		}
+	}
+	Indices.Sort();
+	return Indices;
+}
+
+void UGameHUDWidget::DebugTeamNext()
+{
+	TArray<int32> Active = GetActiveAITeamIndices(GetWorld());
+	if (Active.Num() == 0) return;
+
+	int32 CurrentIdx = Active.IndexOfByKey(DebugAITeamIndex);
+	if (CurrentIdx == INDEX_NONE || CurrentIdx == Active.Num() - 1)
+		DebugAITeamIndex = Active[0];          // wrap to first
+	else
+		DebugAITeamIndex = Active[CurrentIdx + 1];
+
+	// Force the HUD to rebuild immediately
+	CachedDebugTeamIndex = -1;
+	AIDebugUpdateTimer = 0.0f;
+}
+
+void UGameHUDWidget::DebugTeamLast()
+{
+	TArray<int32> Active = GetActiveAITeamIndices(GetWorld());
+	if (Active.Num() == 0) return;
+
+	int32 CurrentIdx = Active.IndexOfByKey(DebugAITeamIndex);
+	if (CurrentIdx == INDEX_NONE || CurrentIdx == 0)
+		DebugAITeamIndex = Active.Last();      // wrap to last
+	else
+		DebugAITeamIndex = Active[CurrentIdx - 1];
+
+	// Force the HUD to rebuild immediately
+	CachedDebugTeamIndex = -1;
+	AIDebugUpdateTimer = 0.0f;
+}
+
+void UGameHUDWidget::RefreshHUDActorCaches()
+{
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ACityActor::StaticClass(), HUDCachedCities);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), HUDCachedVehicles);
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AResourceActor::StaticClass(), HUDCachedResources);
+}
+
+int32 UGameHUDWidget::GetCityCountForTeam(uint8 TeamIndex) const
+{
+	int32 Count = 0;
+	EOwnerTeam Team = static_cast<EOwnerTeam>(TeamIndex);
+	for (AActor* Actor : HUDCachedCities)
+	{
+		if (ACityActor* City = Cast<ACityActor>(Actor))
+		{
+			if (City->OwnerTeam == Team) Count++;
+		}
+	}
+	return Count;
 }

@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "CityWidget.h"
 #include "CityActor.h"
@@ -55,6 +55,20 @@ void UCityWidget::OnSpawnVehicleClicked()
 	}
 }
 
+void UCityWidget::OnSpawnShipClicked()
+{
+	if (!CanAffordShip())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Cannot spawn ship - insufficient funds"));
+		return;
+	}
+
+	if (CurrentCity)
+	{
+		CurrentCity->SpawnShip();
+	}
+}
+
 void UCityWidget::OnCloseButtonClicked()
 {
 	// UE_LOG(LogTemp, Warning, TEXT("Close button clicked - hiding UI"));
@@ -99,6 +113,32 @@ bool UCityWidget::CanAffordVehicle() const
 	}
 
 	return PC->PlayerOrangeSubstrate >= CurrentCity->VehicleCost;
+}
+
+bool UCityWidget::CanAffordShip() const
+{
+	if (!CurrentCity || !CurrentCity->bIsCoastal)
+	{
+		return false;
+	}
+
+	APlanetConquestPlayerController* PC = Cast<APlanetConquestPlayerController>(UGameplayStatics::GetPlayerController(GetWorld(), 0));
+	if (!PC)
+	{
+		return false;
+	}
+
+	return PC->PlayerOrangeSubstrate >= CurrentCity->ShipCost;
+}
+
+bool UCityWidget::IsCityCoastal() const
+{
+	return CurrentCity && CurrentCity->bIsCoastal;
+}
+
+ESlateVisibility UCityWidget::GetShipButtonVisibility() const
+{
+	return IsCityCoastal() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
 }
 
 void UCityWidget::OnBuyFactoryClicked()

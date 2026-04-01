@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "ResourceActor.h"
 #include "Components/StaticMeshComponent.h"
@@ -13,6 +13,7 @@
 #include "../Cities/CityActor.h"
 #include "../../Core/PlanetConquestGameMode.h"
 #include "../../Core/PlanetConquestPlayerController.h"
+#include "../../World/PlanetActor.h"
 #include "DrawDebugHelpers.h"
 
 AResourceActor::AResourceActor()
@@ -44,21 +45,21 @@ AResourceActor::AResourceActor()
 		ResourceMesh->SetMaterial(0, TeamColorMat.Object);
 	}
 	
-	// Enable collision for selection and obstacle detection (but not physical blocking)
-	ResourceMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly); // Query only - no physics blocking!
-	ResourceMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
-	ResourceMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block); // For selection raycasts
-	ResourceMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block); // Block for detection sweeps (but QueryOnly means no physical blocking)
-	ResourceMesh->SetCollisionObjectType(ECC_WorldStatic); // Act as static obstacle for queries
-	// Scale up the collision bounds to make clicking easier (2x larger clickable area)
+	// Disable collision completely on mesh - resources should not block vehicles at all
+	// Selection is handled by SelectionBox component which has proper collision settings
+	ResourceMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// Scale up the bounds to make visual representation larger
 	ResourceMesh->SetBoundsScale(2.0f);
 
-	// Create selection box (wireframe cube)
+	// Create selection box (wireframe cube) - this handles mouse click detection
 	SelectionBox = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SelectionBox"));
 	SelectionBox->SetupAttachment(RootComponent);
 	SelectionBox->SetStaticMesh(CubeMesh.Object);
 	SelectionBox->SetRelativeScale3D(FVector(2.5f, 2.5f, 2.5f)); // Much larger than 1.5x resource for visibility
-	SelectionBox->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// Enable click detection on selection box only
+	SelectionBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	SelectionBox->SetCollisionResponseToAllChannels(ECR_Ignore);
+	SelectionBox->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	SelectionBox->SetVisibility(false); // Hidden by default
 	SelectionBox->SetRenderCustomDepth(true);
 	
@@ -104,8 +105,27 @@ void AResourceActor::BeginPlay()
 {
 	Super::BeginPlay();
 	
+	// Find owning planet
+	TArray<AActor*> FoundActors;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlanetActor::StaticClass(), FoundActors);
+	if (FoundActors.Num() > 0)
+	{
+		OwningPlanet = Cast<APlanetActor>(FoundActors[0]);
+	}
+	
 	// Auto-align to planet on start
 	AlignToPlanet();
+
+	// Assign continent ID (used for spatial filtering in AI/vehicle logic)
+	if (OwningPlanet)
+	{
+		FVector SphereDir = (GetActorLocation() - OwningPlanet->GetActorLocation()).GetSafeNormal();
+		ContinentID = OwningPlanet->GetContinentIdForPoint(SphereDir);
+	}
+
+	// DISABLED: No longer generating navigation waypoints around resources
+	// This simplifies pathfinding - vehicles now navigate directly to resource centers
+	// GenerateNavigationWaypoints();
 	
 	// Set initial color based on owner
 	UpdateColor();
@@ -135,9 +155,9 @@ void AResourceActor::Tick(float DeltaTime)
 	{
 		TimeSinceLastInfluenceChange = 0.0f;
 
-		// Find all vehicles in the world
-		TArray<AActor*> FoundVehicles;
-		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), FoundVehicles);
+		// Populate vehicle cache once per interval (reused for all 3 call sites below)
+		UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), CachedAllVehiclesForResource);
+		const TArray<AActor*>& FoundVehicles = CachedAllVehiclesForResource;
 
 		// Check if any vehicles are within capture range - count per team
 		TMap<EOwnerTeam, int32> VehicleCountPerTeam;
@@ -151,6 +171,17 @@ void AResourceActor::Tick(float DeltaTime)
 		VehicleCountPerTeam.Add(EOwnerTeam::AI6, 0);
 		VehicleCountPerTeam.Add(EOwnerTeam::AI7, 0);
 		VehicleCountPerTeam.Add(EOwnerTeam::AI8, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI9, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI10, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI11, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI12, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI13, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI14, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI15, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI16, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI17, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI18, 0);
+		VehicleCountPerTeam.Add(EOwnerTeam::AI19, 0);
 
 		for (AActor* Actor : FoundVehicles)
 		{
@@ -234,8 +265,7 @@ void AResourceActor::Tick(float DeltaTime)
 				// If no vehicle has the lock yet, assign the first one we find
 				if (!CapturingVehicle || !IsValid(CapturingVehicle))
 				{
-					TArray<AActor*> NearbyVehicles;
-					UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), NearbyVehicles);
+					const TArray<AActor*>& NearbyVehicles = CachedAllVehiclesForResource;
 					for (AActor* Actor : NearbyVehicles)
 					{
 						AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
@@ -255,8 +285,7 @@ void AResourceActor::Tick(float DeltaTime)
 					CurrentInfluence = MaxInfluence;
 					
 					// Clear TargetResource on all nearby vehicles capturing this
-					TArray<AActor*> NearbyVehicles;
-					UGameplayStatics::GetAllActorsOfClass(GetWorld(), AVehicleActor::StaticClass(), NearbyVehicles);
+					const TArray<AActor*>& NearbyVehicles = CachedAllVehiclesForResource;
 					for (AActor* Actor : NearbyVehicles)
 					{
 						AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor);
@@ -523,12 +552,9 @@ void AResourceActor::SetupMesh()
 				ResourceMesh->SetStaticMesh(CrystalMesh);
 				ResourceMesh->SetRelativeScale3D(FVector(1.0f, 1.0f, 1.0f) * SizeScale);
 				
-				// Restore collision settings after mesh change
-				ResourceMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-				ResourceMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
-				ResourceMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-				ResourceMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-				ResourceMesh->SetCollisionObjectType(ECC_WorldStatic);
+				// Disable collision completely - same as other resource types
+				// Vehicles should pass through resources without any collision
+				ResourceMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 				ResourceMesh->SetBoundsScale(2.0f);
 				
 				// Update selection box scale to match
@@ -920,7 +946,121 @@ case EOwnerTeam::AI7:
 	return FLinearColor(0.2f, 0.3f, 0.85f); // Royal blue
 	case EOwnerTeam::AI8:
 		return FLinearColor(1.0f, 1.0f, 1.0f); // White
+	case EOwnerTeam::AI9:
+		return FLinearColor(1.0f, 0.0f, 0.5f); // Hot pink
+	case EOwnerTeam::AI10:
+		return FLinearColor(1.0f, 0.55f, 0.0f); // Orange
+	case EOwnerTeam::AI11:
+		return FLinearColor(0.0f, 0.7f, 0.5f); // Teal
+	case EOwnerTeam::AI12:
+		return FLinearColor(0.5f, 1.0f, 0.0f); // Lime
+	case EOwnerTeam::AI13:
+		return FLinearColor(1.0f, 0.0f, 1.0f); // Magenta
+	case EOwnerTeam::AI14:
+		return FLinearColor(0.55f, 0.27f, 0.0f); // Bronze
+	case EOwnerTeam::AI15:
+		return FLinearColor(0.05f, 0.1f, 0.5f); // Navy
+	case EOwnerTeam::AI16:
+		return FLinearColor(1.0f, 0.75f, 0.0f); // Gold
+	case EOwnerTeam::AI17:
+		return FLinearColor(0.7f, 0.7f, 0.7f); // Silver
+	case EOwnerTeam::AI18:
+		return FLinearColor(0.55f, 0.0f, 0.05f); // Crimson
+	case EOwnerTeam::AI19:
+		return FLinearColor(0.5f, 1.0f, 0.75f); // Mint
 	default:
 		return FLinearColor::Gray; // Gray (neutral)
 	}
+}
+
+// ===== NAVIGATION WAYPOINT GENERATION =====
+
+void AResourceActor::GenerateNavigationWaypoints()
+{
+	if (!OwningPlanet)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Resource %s] GenerateNavigationWaypoints: No OwningPlanet"), *GetName());
+		return;
+	}
+	
+	const float WaypointRadius = 400.0f; // Distance from resource center
+	const int32 NumWaypoints = 6; // Hexagon shape around resource
+	
+	FVector ResourcePos = GetActorLocation();
+	FVector PlanetLoc = OwningPlanet->GetActorLocation();
+	FVector ResourceDir = (ResourcePos - PlanetLoc).GetSafeNormal();
+	
+	// Create two tangent vectors perpendicular to resource direction
+	FVector Tangent1 = FVector::CrossProduct(ResourceDir, FVector::UpVector).GetSafeNormal();
+	if (Tangent1.IsNearlyZero())
+	{
+		Tangent1 = FVector::CrossProduct(ResourceDir, FVector::RightVector).GetSafeNormal();
+	}
+	FVector Tangent2 = FVector::CrossProduct(ResourceDir, Tangent1).GetSafeNormal();
+	
+	// Place waypoints in hexagon around resource
+	for (int32 i = 0; i < NumWaypoints; i++)
+	{
+		float Angle = (2.0f * PI * i) / NumWaypoints;
+		
+		// Offset direction on sphere surface
+		FVector OffsetDir = Tangent1 * FMath::Cos(Angle) + Tangent2 * FMath::Sin(Angle);
+		
+		// Calculate the direction that's WaypointRadius units away on sphere surface
+		// Angular distance: Angle = Distance / Radius
+		float BasePlanetRadius = OwningPlanet->PlanetRadius;
+		float AngularDistance = WaypointRadius / BasePlanetRadius;
+		
+		// Rotate ResourceDir toward OffsetDir by AngularDistance
+		FVector WaypointDir = FMath::Lerp(ResourceDir, OffsetDir, FMath::Sin(AngularDistance)).GetSafeNormal();
+		
+		// Get terrain height at waypoint location
+		float TerrainHeight = OwningPlanet->CalculateHeightAtPoint(WaypointDir);
+		float TerrainRadius = BasePlanetRadius * (1.0f + TerrainHeight);
+		FVector WaypointPos = PlanetLoc + WaypointDir * TerrainRadius;
+		
+		// Check if waypoint is on land (don't place waypoints in water)
+		if (!OwningPlanet->IsPointOnLand(WaypointDir))
+		{
+			continue; // Skip this waypoint
+		}
+		
+		// Register waypoint with planet
+		int32 WaypointIndex = OwningPlanet->RegisterNavigationWaypoint(WaypointPos, this);
+		RegisteredWaypointIndices.Add(WaypointIndex);
+	}
+	
+	// Regenerate edges after adding all waypoints
+	if (RegisteredWaypointIndices.Num() > 0)
+	{
+		OwningPlanet->RegenerateNavigationEdges();
+		UE_LOG(LogTemp, Log, TEXT("[Resource %s] Generated %d navigation waypoints"), 
+			*GetName(), RegisteredWaypointIndices.Num());
+	}
+}
+
+void AResourceActor::RemoveNavigationWaypoints()
+{
+	if (!OwningPlanet)
+	{
+		return;
+	}
+	
+	// Unregister all waypoints
+	for (int32 WaypointIndex : RegisteredWaypointIndices)
+	{
+		OwningPlanet->UnregisterNavigationWaypoint(WaypointIndex, this);
+	}
+	
+	RegisteredWaypointIndices.Empty();
+	
+	//UE_LOG(LogTemp, Log, TEXT("[Resource %s] Removed navigation waypoints"), *GetName());
+}
+
+void AResourceActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// Clean up navigation waypoints when resource is destroyed
+	RemoveNavigationWaypoints();
+	
+	Super::EndPlay(EndPlayReason);
 }

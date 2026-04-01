@@ -1,7 +1,8 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "CityActor.h"
 #include "VehicleActor.h"
+#include "ShipActor.h"
 #include "ResourceActor.h"
 #include "PlanetConquestPlayerController.h"
 #include "../../World/PlanetActor.h"
@@ -174,6 +175,9 @@ void ACityActor::BeginPlay()
 			UpdatePopulation(6.0f); // Pass delta time of 6 seconds
 		}, 6.0f, true); // Repeat every 6 seconds
 	}
+	
+	// Generate navigation waypoints around city
+	GenerateNavigationWaypoints();
 }
 
 void ACityActor::SpawnCapitalBuilding()
@@ -193,6 +197,7 @@ void ACityActor::SpawnCapitalBuilding()
 		CapitalBuilding->OwnerTeam = OwnerTeam;
 		CapitalBuilding->PlanetCenter = PlanetCenter;
 		CapitalBuilding->PlanetRadius = PlanetRadius;
+		CapitalBuilding->OwningPlanet = OwningPlanet;
 		CapitalBuilding->ParentCity = this;
 		
 		// Debug: Log positions before alignment
@@ -647,7 +652,7 @@ void ACityActor::SpawnVehicle()
 		ActualTerrainRadius = OwningPlanet->PlanetRadius * (1.0f + TerrainHeight);
 	}
 	
-	FVector SpawnLocation = SpawnDirection * ActualTerrainRadius;
+	FVector SpawnLocation = PlanetCenter + SpawnDirection * ActualTerrainRadius;
 	
 	// Spawn the vehicle
 	FActorSpawnParameters SpawnParams;
@@ -669,6 +674,83 @@ void ACityActor::SpawnVehicle()
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("Failed to spawn vehicle!"));
+	}
+}
+
+void ACityActor::SpawnShip()
+{
+	if (!bIsCoastal)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnShip: City %s is not coastal, cannot spawn ship"), *GetName());
+		return;
+	}
+
+	if (!GetWorld())
+	{
+		return;
+	}
+
+	APlanetConquestPlayerController* PC = Cast<APlanetConquestPlayerController>(UGameplayStatics::GetPlayerController(GetWorld(), 0));
+	if (!PC)
+	{
+		return;
+	}
+
+	if (PC->PlayerOrangeSubstrate < ShipCost)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SpawnShip: Insufficient Orange Substrate! Need %d, have %d"), ShipCost, PC->PlayerOrangeSubstrate);
+		return;
+	}
+
+	PC->PlayerOrangeSubstrate -= ShipCost;
+
+	// Spawn 8000 units from city center in the direction away from the continent center
+	FVector CityDir = (GetActorLocation() - PlanetCenter).GetSafeNormal();
+
+	// Find continent center
+	FVector AwayDir = CityDir; // fallback: straight out
+	if (OwningPlanet)
+	{
+		int32 ContinentId = OwningPlanet->GetContinentIdForPoint(CityDir);
+		if (ContinentId >= 0 && ContinentId < OwningPlanet->ContinentSeeds.Num())
+		{
+			FVector ContinentCenter = OwningPlanet->ContinentSeeds[ContinentId].Position.GetSafeNormal();
+			// Rotation axis: perpendicular to both, rotates CityDir further away from ContinentCenter
+			FVector RotAxis = FVector::CrossProduct(ContinentCenter, CityDir).GetSafeNormal();
+			if (!RotAxis.IsNearlyZero())
+			{
+				float SpawnAngularDist = 8000.0f / PlanetRadius;
+				FQuat AwayRot = FQuat(RotAxis, SpawnAngularDist);
+				AwayDir = AwayRot.RotateVector(CityDir).GetSafeNormal();
+			}
+		}
+	}
+
+	// Place ship at sea level
+	float SeaLevelRadius = PlanetRadius;
+	if (OwningPlanet)
+	{
+		SeaLevelRadius = OwningPlanet->PlanetRadius * (1.0f + OwningPlanet->SeaLevel);
+	}
+	FVector SpawnLocation = PlanetCenter + AwayDir * (SeaLevelRadius + 50.0f);
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+
+	AShipActor* NewShip = GetWorld()->SpawnActor<AShipActor>(AShipActor::StaticClass(), SpawnLocation, FRotator::ZeroRotator, SpawnParams);
+	if (NewShip)
+	{
+		NewShip->PlanetCenter = PlanetCenter;
+		NewShip->PlanetRadius = SeaLevelRadius;
+		NewShip->OwnerTeam = OwnerTeam;
+		NewShip->OwningPlanet = OwningPlanet;
+		NewShip->AlignToPlanet();
+		NewShip->UpdateColor();
+		UE_LOG(LogTemp, Warning, TEXT("Ship spawned near city %s at location: %s"), *GetName(), *SpawnLocation.ToString());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to spawn ship!"));
 	}
 }
 
@@ -1023,6 +1105,7 @@ AFactoryBuildingActor* ACityActor::AddFactory()
 		Factory->OwnerTeam = OwnerTeam;
 		Factory->PlanetCenter = PlanetCenter;
 		Factory->PlanetRadius = PlanetRadius;
+		Factory->OwningPlanet = OwningPlanet;
 		Factory->ParentCity = this;
 		Factory->AlignToPlanet();
 		Factory->UpdateColor();
@@ -1064,6 +1147,7 @@ ATurretBuildingActor* ACityActor::AddTurret()
 		Turret->OwnerTeam = OwnerTeam;
 		Turret->PlanetCenter = PlanetCenter;
 		Turret->PlanetRadius = PlanetRadius;
+		Turret->OwningPlanet = OwningPlanet;
 		Turret->ParentCity = this;
 		Buildings.Add(Turret);
 		
@@ -1172,6 +1256,7 @@ ALabBuildingActor* ACityActor::AddLab()
 		Lab->OwnerTeam = OwnerTeam;
 		Lab->PlanetCenter = PlanetCenter;
 		Lab->PlanetRadius = PlanetRadius;
+		Lab->OwningPlanet = OwningPlanet;
 		Lab->ParentCity = this;
 		Lab->AlignToPlanet();
 		Lab->UpdateColor();
@@ -1436,6 +1521,28 @@ FLinearColor ACityActor::GetTeamColor() const
 			return FLinearColor(0.2f, 0.3f, 0.85f); // Royal blue
 		case EOwnerTeam::AI8:
 			return FLinearColor(1.0f, 1.0f, 1.0f); // White
+		case EOwnerTeam::AI9:
+			return FLinearColor(1.0f, 0.0f, 0.5f); // Hot pink
+		case EOwnerTeam::AI10:
+			return FLinearColor(1.0f, 0.55f, 0.0f); // Orange
+		case EOwnerTeam::AI11:
+			return FLinearColor(0.0f, 0.7f, 0.5f); // Teal
+		case EOwnerTeam::AI12:
+			return FLinearColor(0.5f, 1.0f, 0.0f); // Lime
+		case EOwnerTeam::AI13:
+			return FLinearColor(1.0f, 0.0f, 1.0f); // Magenta
+		case EOwnerTeam::AI14:
+			return FLinearColor(0.55f, 0.27f, 0.0f); // Bronze
+		case EOwnerTeam::AI15:
+			return FLinearColor(0.05f, 0.1f, 0.5f); // Navy
+		case EOwnerTeam::AI16:
+			return FLinearColor(1.0f, 0.75f, 0.0f); // Gold
+		case EOwnerTeam::AI17:
+			return FLinearColor(0.7f, 0.7f, 0.7f); // Silver
+		case EOwnerTeam::AI18:
+			return FLinearColor(0.55f, 0.0f, 0.05f); // Crimson
+		case EOwnerTeam::AI19:
+			return FLinearColor(0.5f, 1.0f, 0.75f); // Mint
 		default:
 			return FLinearColor::Gray;
 	}
@@ -1559,3 +1666,89 @@ FLinearColor ACityActor::GetGreenSubstrateColor() const
 	}
 }
 
+// ===== NAVIGATION WAYPOINT GENERATION =====
+
+void ACityActor::GenerateNavigationWaypoints()
+{
+	if (!OwningPlanet)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[City %s] GenerateNavigationWaypoints: No OwningPlanet"), *CityName);
+		return;
+	}
+	
+	const float WaypointRadius = 1600.0f;  // Distance from city center
+	const int32 NumWaypoints = 12; // 12 waypoints = 30-degree spacing around city
+	
+	FVector CityPos = GetActorLocation();
+	FVector PlanetLoc = OwningPlanet->GetActorLocation();
+	FVector CityDir = (CityPos - PlanetLoc).GetSafeNormal();
+	
+	// Create two tangent vectors perpendicular to city direction
+	FVector Tangent1 = FVector::CrossProduct(CityDir, FVector::UpVector).GetSafeNormal();
+	if (Tangent1.IsNearlyZero())
+	{
+		Tangent1 = FVector::CrossProduct(CityDir, FVector::RightVector).GetSafeNormal();
+	}
+	FVector Tangent2 = FVector::CrossProduct(CityDir, Tangent1).GetSafeNormal();
+	
+	// Place waypoints in circle around city
+	for (int32 i = 0; i < NumWaypoints; i++)
+	{
+		float Angle = (2.0f * PI * i) / NumWaypoints;
+		
+		// Offset direction on sphere surface
+		FVector OffsetDir = Tangent1 * FMath::Cos(Angle) + Tangent2 * FMath::Sin(Angle);
+		
+		// Calculate the direction that's WaypointRadius units away on sphere surface
+		// Angular distance: Angle = Distance / Radius
+		float BasePlanetRadius = OwningPlanet->PlanetRadius;
+		float AngularDistance = WaypointRadius / BasePlanetRadius;
+		
+		// Rotate CityDir toward OffsetDir by AngularDistance
+		FVector WaypointDir = FMath::Lerp(CityDir, OffsetDir, FMath::Sin(AngularDistance)).GetSafeNormal();
+		
+		// Get terrain height at waypoint location
+		float TerrainHeight = OwningPlanet->CalculateHeightAtPoint(WaypointDir);
+		float TerrainRadius = BasePlanetRadius * (1.0f + TerrainHeight);
+		FVector WaypointPos = PlanetLoc + WaypointDir * TerrainRadius;
+		
+		// Always add city waypoints (even if in water - cities control coastal areas)
+		// Register waypoint with planet
+		int32 WaypointIndex = OwningPlanet->RegisterNavigationWaypoint(WaypointPos, this);
+		RegisteredWaypointIndices.Add(WaypointIndex);
+	}
+	
+	// Regenerate edges after adding all waypoints
+	if (RegisteredWaypointIndices.Num() > 0)
+	{
+		OwningPlanet->RegenerateNavigationEdges();
+		UE_LOG(LogTemp, Log, TEXT("[City %s] Generated %d navigation waypoints"), 
+			*CityName, RegisteredWaypointIndices.Num());
+	}
+}
+
+void ACityActor::RemoveNavigationWaypoints()
+{
+	if (!OwningPlanet)
+	{
+		return;
+	}
+	
+	// Unregister all waypoints
+	for (int32 WaypointIndex : RegisteredWaypointIndices)
+	{
+		OwningPlanet->UnregisterNavigationWaypoint(WaypointIndex, this);
+	}
+	
+	RegisteredWaypointIndices.Empty();
+	
+	//UE_LOG(LogTemp, Log, TEXT("[City %s] Removed navigation waypoints"), *CityName);
+}
+
+void ACityActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// Clean up navigation waypoints when city is destroyed
+	RemoveNavigationWaypoints();
+	
+	Super::EndPlay(EndPlayReason);
+}

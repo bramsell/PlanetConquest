@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #pragma once
 
@@ -60,9 +60,16 @@ public:
 
 	// Lifetime before auto-destroy
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projectile")
-	float MaxLifetime = 7.0f; // Increased to ensure projectiles reach turret's 3000 unit range
+	float MaxLifetime = 20.0f; // Extended to cover ship bombardment range (8000 units)
 
 	float CurrentLifetime = 0.0f;
+
+	// Arc: world-unit height above the surface at the midpoint of the trajectory.
+	// 0 = flat (current default). Set by the firing vehicle (e.g. ships use 800).
+	float ArcHeight = 0.0f;
+
+	// Estimated full flight time (InitialDist / ProjectileSpeed). Used for arc progress.
+	float ArcMaxFlightTime = 0.0f;
 
 private:
 	void MoveTowardsTarget(float DeltaTime);

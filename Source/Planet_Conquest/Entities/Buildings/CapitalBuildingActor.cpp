@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "CapitalBuildingActor.h"
 #include "Components/StaticMeshComponent.h"

@@ -1,9 +1,10 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "PlanetConquestPlayerController.h"
 #include "CityActor.h"
 #include "ResourceActor.h"
 #include "VehicleActor.h"
+#include "../Entities/Vehicles/ShipActor.h"
 #include "PlanetActor.h"
 #include "PlanetConquestGameMode.h"
 #include "../Buildings/BuildingActor.h"
@@ -1055,17 +1056,57 @@ void APlanetConquestPlayerController::SelectActorUnderMouse()
 		// If vehicles are selected and we clicked a non-selectable object, move all vehicles
 		if (bHasVehiclesSelected && !bIsSelectableActor)
 		{
-			// Collect vehicles to move
-			TArray<AVehicleActor*> VehiclesToMove;
+			// Collect vehicles to move, split into ships and ground vehicles
+			TArray<AShipActor*> ShipsToMove;
+			TArray<AVehicleActor*> GroundVehiclesToMove;
 			for (AActor* Actor : SelectedActors)
 			{
-				if (AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor))
+				if (AShipActor* Ship = Cast<AShipActor>(Actor))
 				{
-					VehiclesToMove.Add(Vehicle);
+					ShipsToMove.Add(Ship);
+				}
+				else if (AVehicleActor* Vehicle = Cast<AVehicleActor>(Actor))
+				{
+					GroundVehiclesToMove.Add(Vehicle);
 				}
 			}
-			
-			// Arrange vehicles in formation around target point
+
+			// Find planet for land/water checks
+			APlanetActor* Planet = nullptr;
+			FVector PlanetCenter = FVector::ZeroVector;
+			TArray<AActor*> FoundPlanets;
+			UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlanetActor::StaticClass(), FoundPlanets);
+			if (FoundPlanets.Num() > 0)
+			{
+				Planet = Cast<APlanetActor>(FoundPlanets[0]);
+				PlanetCenter = FoundPlanets[0]->GetActorLocation();
+			}
+
+			// --- Move ships: only if clicked location is water ---
+			if (ShipsToMove.Num() > 0)
+			{
+				FVector HitDir = (HitLocation - PlanetCenter).GetSafeNormal();
+				bool bIsWater = Planet && !Planet->IsPointOnLand(HitDir);
+				if (bIsWater)
+				{
+					for (int32 i = 0; i < ShipsToMove.Num(); i++)
+					{
+						// Clear combat state so the Tick doesn't immediately re-route to the old target
+						ShipsToMove[i]->CurrentTarget = nullptr;
+						ShipsToMove[i]->PrimaryTarget = nullptr;
+						ShipsToMove[i]->bHasAssignment = false;
+						ShipsToMove[i]->SetTargetLocation(HitLocation);
+					}
+					UE_LOG(LogTemp, Warning, TEXT("Moving %d ship(s) to water target: %s"), ShipsToMove.Num(), *HitLocation.ToString());
+				}
+				else
+				{
+					UE_LOG(LogTemp, Warning, TEXT("Ship move ignored: target is not water"));
+				}
+			}
+
+			// --- Move ground vehicles: existing formation logic ---
+			TArray<AVehicleActor*>& VehiclesToMove = GroundVehiclesToMove;
 			if (VehiclesToMove.Num() > 0)
 			{
 				if (VehiclesToMove.Num() == 1)
@@ -1081,15 +1122,6 @@ void APlanetConquestPlayerController::SelectActorUnderMouse()
 					// Second ring: 8 vehicles at 300 units
 					// Third ring: 12 vehicles at 450 units, etc.
 					
-					FVector PlanetCenter = FVector::ZeroVector; // Assuming planet at origin
-					// Find the planet actor in the world
-					TArray<AActor*> FoundPlanets;
-					UGameplayStatics::GetAllActorsOfClass(GetWorld(), APlanetActor::StaticClass(), FoundPlanets);
-					if (FoundPlanets.Num() > 0)
-					{
-						PlanetCenter = FoundPlanets[0]->GetActorLocation();
-					}
-					
 					FVector SurfaceNormal = (HitLocation - PlanetCenter).GetSafeNormal();
 					FVector Tangent = FVector::CrossProduct(SurfaceNormal, FVector::UpVector).GetSafeNormal();
 					if (Tangent.IsNearlyZero())
@@ -1100,7 +1132,6 @@ void APlanetConquestPlayerController::SelectActorUnderMouse()
 					
 					int32 VehicleIndex = 0;
 					int32 Ring = 0;
-					int32 VehiclesPlaced = 0;
 					
 					while (VehicleIndex < VehiclesToMove.Num())
 					{
@@ -1128,9 +1159,8 @@ void APlanetConquestPlayerController::SelectActorUnderMouse()
 						Ring++;
 					}
 				}
+				UE_LOG(LogTemp, Warning, TEXT("Moving %d vehicle(s) to formation around: %s"), VehiclesToMove.Num(), *HitLocation.ToString());
 			}
-			
-			UE_LOG(LogTemp, Warning, TEXT("Moving %d vehicle(s) to formation around: %s"), VehiclesToMove.Num(), *HitLocation.ToString());
 			
 			// Deselect vehicles after giving move command
 			DeselectAllActors();
