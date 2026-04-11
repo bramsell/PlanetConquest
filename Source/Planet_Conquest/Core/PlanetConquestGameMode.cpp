@@ -7,7 +7,14 @@
 #include "AITeamController.h"
 #include "EngineUtils.h"
 #include "../Entities/Cities/CityActor.h"
+#include "../Entities/Resources/ResourceActor.h"
+#include "../Entities/Buildings/BuildingActor.h"
+#include "../Entities/Buildings/MineActor.h"
+#include "../Entities/Vehicles/VehicleActor.h"
+#include "../Entities/Vehicles/ShipActor.h"
+#include "../Entities/Projectiles/ProjectileActor.h"
 #include "../UI/TalkDialogueWidget.h"
+#include "../World/PlanetActor.h"
 #include "Kismet/GameplayStatics.h"
 
 APlanetConquestGameMode::APlanetConquestGameMode()
@@ -2368,4 +2375,589 @@ FString APlanetConquestGameMode::GetTeamAllianceName(EOwnerTeam Team) const
 	}
 
 	return TEXT("No Allegiance");
+}
+
+// ========== WORLD STATE SERIALISATION ==========
+
+void APlanetConquestGameMode::CollectWorldState(UPlanetConquestSaveGame* Save)
+{
+	if (!Save || !GetWorld()) return;
+
+	// ------------------------------------------------------------------
+	// Player economy
+	// ------------------------------------------------------------------
+	if (APlanetConquestPlayerController* PC = Cast<APlanetConquestPlayerController>(
+		UGameplayStatics::GetPlayerController(GetWorld(), 0)))
+	{
+		Save->PlayerState.OrangeSubstrate      = PC->PlayerOrangeSubstrate;
+		Save->PlayerState.BlackSubstrate       = PC->PlayerBlackSubstrate;
+		Save->PlayerState.GreenSubstrate       = PC->PlayerGreenSubstrate;
+		Save->PlayerState.BlackSubstrateMode   = static_cast<uint8>(PC->BlackSubstrateMode);
+		Save->PlayerState.MiningMode           = static_cast<uint8>(PC->MiningMode);
+		Save->PlayerState.bVehicleAutopilotMode = PC->bVehicleAutopilotMode;
+
+		Save->PlayerState.DiscoveredResourceTypes.Empty();
+		for (EResourceType Type : PC->DiscoveredResourceTypes)
+		{
+			Save->PlayerState.DiscoveredResourceTypes.Add(static_cast<uint8>(Type));
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// AI team economies + diplomacy cooldowns + alliance state
+	// ------------------------------------------------------------------
+	Save->AITeamStates.Empty();
+	for (TActorIterator<AAITeamController> It(GetWorld()); It; ++It)
+	{
+		AAITeamController* AI = *It;
+		if (!AI) continue;
+
+		FAITeamStateSave S;
+		S.Team                = static_cast<uint8>(AI->ControlledTeam);
+		S.OrangeSubstrate     = AI->OrangeSubstrate;
+		S.BlackSubstrate      = AI->BlackSubstrate;
+		S.CurrentDecisionCycle = AI->CurrentDecisionCycle;
+
+		for (auto& KV : AI->LastTradeRequestCycle)
+		{
+			S.TradeCooldownTeams.Add(static_cast<uint8>(KV.Key));
+			S.TradeCooldownCycles.Add(KV.Value);
+		}
+		for (auto& KV : AI->LastBribeAttemptCycle)
+		{
+			S.BribeCooldownTeams.Add(static_cast<uint8>(KV.Key));
+			S.BribeCooldownCycles.Add(KV.Value);
+		}
+		for (EOwnerTeam Allied : AI->AllianceState.AlliedTeams)
+		{
+			S.AlliedTeams.Add(static_cast<uint8>(Allied));
+		}
+		S.AllianceName = AI->AllianceState.AllianceName;
+		for (auto& KV : AI->AllianceState.LastAllianceRequestCycle)
+		{
+			S.AllianceReqCooldownTeams.Add(static_cast<uint8>(KV.Key));
+			S.AllianceReqCooldownCycles.Add(KV.Value);
+		}
+
+		Save->AITeamStates.Add(S);
+	}
+
+	// ------------------------------------------------------------------
+	// Cities
+	// ------------------------------------------------------------------
+	Save->CityStates.Empty();
+	for (TActorIterator<ACityActor> It(GetWorld()); It; ++It)
+	{
+		ACityActor* City = *It;
+		if (!City) continue;
+
+		FCityStateSave S;
+		S.Location      = City->GetActorLocation();
+		S.OwnerTeam     = static_cast<uint8>(City->OwnerTeam);
+		S.CurrentHealth = City->CurrentHealth;
+		S.Population    = City->Population;
+		S.GreenSubstrate = City->GreenSubstrate;
+		Save->CityStates.Add(S);
+	}
+
+	// ------------------------------------------------------------------
+	// Resources
+	// ------------------------------------------------------------------
+	Save->ResourceStates.Empty();
+	for (TActorIterator<AResourceActor> It(GetWorld()); It; ++It)
+	{
+		AResourceActor* Res = *It;
+		if (!Res) continue;
+
+		FResourceStateSave S;
+		S.Location        = Res->GetActorLocation();
+		S.OwnerTeam       = static_cast<uint8>(Res->OwnerTeam);
+		S.ResourceHealth  = Res->ResourceHealth;
+		S.CurrentInfluence = Res->CurrentInfluence;
+		Save->ResourceStates.Add(S);
+	}
+
+	// ------------------------------------------------------------------
+	// Buildings (all types — Capital, Factory, Mine, Turret, Lab)
+	// ------------------------------------------------------------------
+	Save->BuildingStates.Empty();
+	for (TActorIterator<ABuildingActor> It(GetWorld()); It; ++It)
+	{
+		ABuildingActor* Bld = *It;
+		if (!Bld) continue;
+
+		FBuildingStateSave S;
+		S.Location      = Bld->GetActorLocation();
+		S.OwnerTeam     = static_cast<uint8>(Bld->OwnerTeam);
+		S.CurrentHealth = Bld->CurrentHealth;
+		S.BuildingType  = static_cast<uint8>(Bld->BuildingType);
+		Save->BuildingStates.Add(S);
+	}
+
+	// ------------------------------------------------------------------
+	// Vehicles (TActorIterator<AVehicleActor> picks up AShipActor too)
+	// ------------------------------------------------------------------
+	Save->VehicleStates.Empty();
+	for (TActorIterator<AVehicleActor> It(GetWorld()); It; ++It)
+	{
+		AVehicleActor* Veh = *It;
+		if (!Veh) continue;
+
+		FVehicleStateSave S;
+		S.Location      = Veh->GetActorLocation();
+		S.Rotation      = Veh->GetActorRotation();
+		S.OwnerTeam     = static_cast<uint8>(Veh->OwnerTeam);
+		S.CurrentHealth = Veh->CurrentHealth;
+		S.bIsShip       = Veh->IsA<AShipActor>();
+
+		// Player vehicle targeting state
+		if (Veh->OwnerTeam == EOwnerTeam::Player)
+		{
+			S.bPlayerAutonomousMode = Veh->bPlayerAutonomousMode;
+			S.bClusterOnlyMode      = Veh->bClusterOnlyMode;
+			S.ActiveClusterID       = Veh->ActiveClusterID;
+
+			if (IsValid(Veh->TargetResource))
+				S.TargetResourceLocation = Veh->TargetResource->GetActorLocation();
+			if (IsValid(Veh->PostMineResource))
+				S.PostMineResourceLocation = Veh->PostMineResource->GetActorLocation();
+
+			// If CurrentTarget is a mine, save its location so we can re-attack after load
+			if (AMineActor* Mine = Cast<AMineActor>(Veh->CurrentTarget))
+				if (IsValid(Mine))
+					S.CurrentTargetMineLocation = Mine->GetActorLocation();
+
+			for (EOwnerTeam T : Veh->ForcedHostileTeams)
+				S.ForcedHostileTeams.Add(static_cast<uint8>(T));
+		}
+
+		Save->VehicleStates.Add(S);
+	}
+
+	// ------------------------------------------------------------------
+	// Symmetric relationships (Disposition + trade/bribe/alliance counts)
+	// ------------------------------------------------------------------
+	Save->RelationshipStates.Empty();
+	for (auto& KV : Relationships)
+	{
+		const uint32 Key = KV.Key;
+		// Key encoding: lowerTeam in low 16, higherTeam in high 16
+		const uint8 T1 = static_cast<uint8>(Key & 0xFF);
+		const uint8 T2 = static_cast<uint8>((Key >> 16) & 0xFF);
+
+		FRelationshipSave S;
+		S.Team1                = T1;
+		S.Team2                = T2;
+		S.BaseDisposition      = KV.Value.BaseDisposition;
+		S.NeutralResourcesTaken = KV.Value.NeutralResourcesTakenInTerritory;
+		S.TradeCount           = KV.Value.TradeCount;
+		S.BribeCount           = KV.Value.BribeCount;
+		for (EOwnerTeam T : KV.Value.AllianceBonuses)       S.AllianceBonuses.Add(static_cast<uint8>(T));
+		for (EOwnerTeam T : KV.Value.MutualEnemyBonusesApplied) S.MutualEnemyBonuses.Add(static_cast<uint8>(T));
+		Save->RelationshipStates.Add(S);
+	}
+
+	// ------------------------------------------------------------------
+	// Asymmetric Fear + Respect
+	// ------------------------------------------------------------------
+	Save->AsymmetricRelStates.Empty();
+	TSet<uint32> FearDone;
+	for (auto& KV : FearValues)
+	{
+		const uint32 Key = KV.Key;
+		FAsymmetricRelSave S;
+		S.FromTeam = static_cast<uint8>(Key & 0xFF);
+		S.ToTeam   = static_cast<uint8>((Key >> 16) & 0xFF);
+		S.Fear     = KV.Value;
+		S.Respect  = RespectValues.FindRef(Key);
+		Save->AsymmetricRelStates.Add(S);
+		FearDone.Add(Key);
+	}
+	// Capture any Respect entries that have no matching Fear entry
+	for (auto& KV : RespectValues)
+	{
+		if (!FearDone.Contains(KV.Key))
+		{
+			const uint32 Key = KV.Key;
+			FAsymmetricRelSave S;
+			S.FromTeam = static_cast<uint8>(Key & 0xFF);
+			S.ToTeam   = static_cast<uint8>((Key >> 16) & 0xFF);
+			S.Fear     = 0.f;
+			S.Respect  = KV.Value;
+			Save->AsymmetricRelStates.Add(S);
+		}
+	}
+
+	Save->bWorldStateValid = true;
+
+	int32 SavedMineCount = 0;
+	for (const FBuildingStateSave& BS : Save->BuildingStates)
+	{
+		if (static_cast<EBuildingType>(BS.BuildingType) == EBuildingType::Mine) SavedMineCount++;
+		UE_LOG(LogTemp, Log, TEXT("[Save] Building at (%.0f,%.0f,%.0f) type=%d owner=%d"),
+			BS.Location.X, BS.Location.Y, BS.Location.Z, (int32)BS.BuildingType, (int32)BS.OwnerTeam);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[Save] CollectWorldState: %d cities, %d resources, %d buildings (%d mines), %d vehicles, %d AI teams, %d relationships"),
+		Save->CityStates.Num(), Save->ResourceStates.Num(), Save->BuildingStates.Num(), SavedMineCount,
+		Save->VehicleStates.Num(), Save->AITeamStates.Num(), Save->RelationshipStates.Num());
+}
+
+void APlanetConquestGameMode::ApplyWorldState(const UPlanetConquestSaveGame* Save)
+{
+	if (!Save || !Save->bWorldStateValid || !GetWorld()) return;
+
+	UE_LOG(LogTemp, Log, TEXT("[Load] ApplyWorldState: restoring %d cities, %d resources, %d buildings, %d vehicles"),
+		Save->CityStates.Num(), Save->ResourceStates.Num(), Save->BuildingStates.Num(), Save->VehicleStates.Num());
+
+	// ------------------------------------------------------------------
+	// Player economy
+	// ------------------------------------------------------------------
+	if (APlanetConquestPlayerController* PC = Cast<APlanetConquestPlayerController>(
+		UGameplayStatics::GetPlayerController(GetWorld(), 0)))
+	{
+		const FPlayerStateSave& P = Save->PlayerState;
+		PC->PlayerOrangeSubstrate   = P.OrangeSubstrate;
+		PC->PlayerBlackSubstrate    = P.BlackSubstrate;
+		PC->PlayerGreenSubstrate    = P.GreenSubstrate;
+		PC->BlackSubstrateMode      = static_cast<EBlackSubstrateMode>(P.BlackSubstrateMode);
+		PC->MiningMode              = static_cast<EMiningMode>(P.MiningMode);
+		PC->bVehicleAutopilotMode   = P.bVehicleAutopilotMode;
+
+		PC->DiscoveredResourceTypes.Empty();
+		for (uint8 TypeByte : P.DiscoveredResourceTypes)
+		{
+			PC->DiscoveredResourceTypes.Add(static_cast<EResourceType>(TypeByte));
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// AI team economies + diplomacy cooldowns + alliance state
+	// ------------------------------------------------------------------
+	for (const FAITeamStateSave& S : Save->AITeamStates)
+	{
+		const EOwnerTeam Team = static_cast<EOwnerTeam>(S.Team);
+		for (TActorIterator<AAITeamController> It(GetWorld()); It; ++It)
+		{
+			if ((*It)->ControlledTeam != Team) continue;
+			AAITeamController* AI = *It;
+
+			AI->OrangeSubstrate      = S.OrangeSubstrate;
+			AI->BlackSubstrate       = S.BlackSubstrate;
+			AI->CurrentDecisionCycle = S.CurrentDecisionCycle;
+
+			AI->LastTradeRequestCycle.Empty();
+			for (int32 i = 0; i < S.TradeCooldownTeams.Num(); ++i)
+			{
+				AI->LastTradeRequestCycle.Add(static_cast<EOwnerTeam>(S.TradeCooldownTeams[i]), S.TradeCooldownCycles[i]);
+			}
+			AI->LastBribeAttemptCycle.Empty();
+			for (int32 i = 0; i < S.BribeCooldownTeams.Num(); ++i)
+			{
+				AI->LastBribeAttemptCycle.Add(static_cast<EOwnerTeam>(S.BribeCooldownTeams[i]), S.BribeCooldownCycles[i]);
+			}
+			AI->AllianceState.AlliedTeams.Empty();
+			for (uint8 Byte : S.AlliedTeams)
+			{
+				AI->AllianceState.AlliedTeams.Add(static_cast<EOwnerTeam>(Byte));
+			}
+			AI->AllianceState.AllianceName = S.AllianceName;
+			AI->AllianceState.LastAllianceRequestCycle.Empty();
+			for (int32 i = 0; i < S.AllianceReqCooldownTeams.Num(); ++i)
+			{
+				AI->AllianceState.LastAllianceRequestCycle.Add(
+					static_cast<EOwnerTeam>(S.AllianceReqCooldownTeams[i]),
+					S.AllianceReqCooldownCycles[i]);
+			}
+			break;
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Cities — match by nearest saved location (deterministic, same seed)
+	// ------------------------------------------------------------------
+	constexpr float LOCATION_TOLERANCE = 100.f; // units — generous for float precision
+
+	for (TActorIterator<ACityActor> It(GetWorld()); It; ++It)
+	{
+		ACityActor* City = *It;
+		if (!City) continue;
+
+		const FVector CityLoc = City->GetActorLocation();
+		// Find the closest saved city record
+		const FCityStateSave* Best = nullptr;
+		float BestDistSq = FLT_MAX;
+		for (const FCityStateSave& S : Save->CityStates)
+		{
+			float DSq = FVector::DistSquared(CityLoc, S.Location);
+			if (DSq < BestDistSq) { BestDistSq = DSq; Best = &S; }
+		}
+		if (!Best || FMath::Sqrt(BestDistSq) > LOCATION_TOLERANCE) continue;
+
+		City->OwnerTeam     = static_cast<EOwnerTeam>(Best->OwnerTeam);
+		City->CurrentHealth = Best->CurrentHealth;
+		City->Population    = Best->Population;
+		City->GreenSubstrate = Best->GreenSubstrate;
+		City->UpdateColor();
+	}
+
+	// ------------------------------------------------------------------
+	// Resources
+	// ------------------------------------------------------------------
+	for (TActorIterator<AResourceActor> It(GetWorld()); It; ++It)
+	{
+		AResourceActor* Res = *It;
+		if (!Res) continue;
+
+		const FVector ResLoc = Res->GetActorLocation();
+		const FResourceStateSave* Best = nullptr;
+		float BestDistSq = FLT_MAX;
+		for (const FResourceStateSave& S : Save->ResourceStates)
+		{
+			float DSq = FVector::DistSquared(ResLoc, S.Location);
+			if (DSq < BestDistSq) { BestDistSq = DSq; Best = &S; }
+		}
+		if (!Best || FMath::Sqrt(BestDistSq) > LOCATION_TOLERANCE) continue;
+
+		Res->OwnerTeam        = static_cast<EOwnerTeam>(Best->OwnerTeam);
+		Res->ResourceHealth   = Best->ResourceHealth;
+		Res->CurrentInfluence = Best->CurrentInfluence;
+		Res->UpdateColor();
+	}
+
+	// ------------------------------------------------------------------
+	// Buildings
+	// ------------------------------------------------------------------
+	for (TActorIterator<ABuildingActor> It(GetWorld()); It; ++It)
+	{
+		ABuildingActor* Bld = *It;
+		if (!Bld) continue;
+
+		const FVector BldLoc = Bld->GetActorLocation();
+		const FBuildingStateSave* Best = nullptr;
+		float BestDistSq = FLT_MAX;
+		for (const FBuildingStateSave& S : Save->BuildingStates)
+		{
+			float DSq = FVector::DistSquared(BldLoc, S.Location);
+			if (DSq < BestDistSq) { BestDistSq = DSq; Best = &S; }
+		}
+		if (!Best || FMath::Sqrt(BestDistSq) > LOCATION_TOLERANCE) continue;
+
+		Bld->OwnerTeam     = static_cast<EOwnerTeam>(Best->OwnerTeam);
+		Bld->CurrentHealth = Best->CurrentHealth;
+		Bld->UpdateColor();
+	}
+
+	// Find the PlanetActor so we can supply planet reference data (used by both Mines and Vehicles)
+	APlanetActor* Planet = Cast<APlanetActor>(
+		UGameplayStatics::GetActorOfClass(GetWorld(), APlanetActor::StaticClass()));
+
+	// ------------------------------------------------------------------
+	// Mines — not present at level start; re-spawn from save data
+	// ------------------------------------------------------------------
+	// Mines are offset ~150u from their resource, so use a generous match radius.
+	// Must run before Vehicles so CurrentTargetMine re-linking can find mine actors.
+	constexpr float MINE_RESOURCE_RADIUS = 400.f;
+
+	int32 MineRecordCount = 0;
+	int32 MinesSpawnedCount = 0;
+	for (const FBuildingStateSave& S : Save->BuildingStates)
+	{
+		if (static_cast<EBuildingType>(S.BuildingType) != EBuildingType::Mine) continue;
+		MineRecordCount++;
+
+		// Find the closest resource to link the mine to
+		AResourceActor* BestResource = nullptr;
+		float BestDist = MINE_RESOURCE_RADIUS;
+		for (TActorIterator<AResourceActor> It(GetWorld()); It; ++It)
+		{
+			const float Dist = FVector::Dist((*It)->GetActorLocation(), S.Location);
+			if (Dist < BestDist) { BestDist = Dist; BestResource = *It; }
+		}
+
+		if (!BestResource)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Load] Mine record at (%.0f,%.0f,%.0f): no resource within %.0f units — skipping"),
+				S.Location.X, S.Location.Y, S.Location.Z, MINE_RESOURCE_RADIUS);
+			continue;
+		}
+
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AMineActor* NewMine = GetWorld()->SpawnActor<AMineActor>(
+			AMineActor::StaticClass(), S.Location, FRotator::ZeroRotator, SpawnParams);
+
+		if (!NewMine)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Load] SpawnActor<AMineActor> returned null at (%.0f,%.0f,%.0f)"),
+				S.Location.X, S.Location.Y, S.Location.Z);
+			continue;
+		}
+
+		NewMine->OwnerTeam      = static_cast<EOwnerTeam>(S.OwnerTeam);
+		NewMine->CurrentHealth  = S.CurrentHealth;
+		NewMine->TargetResource = BestResource;
+		BestResource->Mine      = NewMine;
+		// Use the resource's planet properties (terrain-surface-adjusted PlanetRadius) so
+		// AlignToPlanet places the mine at the same height it had during gameplay.
+		// Planet->PlanetRadius is only the base sphere radius and would put the mine underground.
+		NewMine->PlanetCenter = BestResource->PlanetCenter;
+		NewMine->PlanetRadius = BestResource->PlanetRadius;
+		if (Planet)
+		{
+			NewMine->OwningPlanet = Planet;
+		}
+		NewMine->AlignToPlanet();
+		NewMine->UpdateColor();
+		MinesSpawnedCount++;
+		UE_LOG(LogTemp, Log, TEXT("[Load] Spawned mine at (%.0f,%.0f,%.0f) owner=%d linked to resource at (%.0f,%.0f,%.0f) dist=%.0f"),
+			NewMine->GetActorLocation().X, NewMine->GetActorLocation().Y, NewMine->GetActorLocation().Z,
+			(int32)NewMine->OwnerTeam,
+			BestResource->GetActorLocation().X, BestResource->GetActorLocation().Y, BestResource->GetActorLocation().Z,
+			BestDist);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[Load] Mine restore: %d records in save, %d spawned successfully"), MineRecordCount, MinesSpawnedCount);
+
+	// ------------------------------------------------------------------
+	// Vehicles — destroy all current vehicles, re-spawn from save data
+	// ------------------------------------------------------------------
+	// First destroy any vehicles that may exist (spawned by factory buildings on BeginPlay)
+	TArray<AVehicleActor*> ExistingVehicles;
+	for (TActorIterator<AVehicleActor> It(GetWorld()); It; ++It)
+	{
+		ExistingVehicles.Add(*It);
+	}
+	for (AVehicleActor* V : ExistingVehicles)
+	{
+		if (V) V->Destroy();
+	}
+
+	for (const FVehicleStateSave& S : Save->VehicleStates)
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		AVehicleActor* Spawned = nullptr;
+		if (S.bIsShip)
+		{
+			Spawned = GetWorld()->SpawnActor<AShipActor>(
+				AShipActor::StaticClass(), S.Location, S.Rotation, SpawnParams);
+		}
+		else
+		{
+			Spawned = GetWorld()->SpawnActor<AVehicleActor>(
+				AVehicleActor::StaticClass(), S.Location, S.Rotation, SpawnParams);
+		}
+
+		if (Spawned)
+		{
+			Spawned->OwnerTeam     = static_cast<EOwnerTeam>(S.OwnerTeam);
+			Spawned->CurrentHealth = S.CurrentHealth;
+			if (Planet)
+			{
+				Spawned->PlanetCenter  = Planet->GetActorLocation();
+				Spawned->PlanetRadius  = Planet->PlanetRadius;
+				Spawned->OwningPlanet  = Planet;
+			}
+			Spawned->UpdateColor();
+
+			// Restore player vehicle targeting state
+			if (Spawned->OwnerTeam == EOwnerTeam::Player && S.bPlayerAutonomousMode)
+			{
+				Spawned->bPlayerAutonomousMode = true;
+				Spawned->bClusterOnlyMode      = S.bClusterOnlyMode;
+				Spawned->ActiveClusterID       = S.ActiveClusterID;
+
+				for (uint8 T : S.ForcedHostileTeams)
+					Spawned->ForcedHostileTeams.Add(static_cast<EOwnerTeam>(T));
+
+				// Re-link TargetResource by nearest location
+				if (!S.TargetResourceLocation.IsZero())
+				{
+					AResourceActor* Best = nullptr;
+					float BestDist = 200.f;
+					for (TActorIterator<AResourceActor> It(GetWorld()); It; ++It)
+					{
+						const float D = FVector::Dist((*It)->GetActorLocation(), S.TargetResourceLocation);
+						if (D < BestDist) { BestDist = D; Best = *It; }
+					}
+					if (Best) Spawned->SetTargetResource(Best);
+				}
+
+				// Re-link PostMineResource by nearest location
+				if (!S.PostMineResourceLocation.IsZero())
+				{
+					AResourceActor* Best = nullptr;
+					float BestDist = 200.f;
+					for (TActorIterator<AResourceActor> It(GetWorld()); It; ++It)
+					{
+						const float D = FVector::Dist((*It)->GetActorLocation(), S.PostMineResourceLocation);
+						if (D < BestDist) { BestDist = D; Best = *It; }
+					}
+					if (Best) Spawned->PostMineResource = Best;
+				}
+
+				// Re-link CurrentTarget mine by nearest location
+				if (!S.CurrentTargetMineLocation.IsZero())
+				{
+					AMineActor* BestMine = nullptr;
+					float BestDist = 200.f;
+					for (TActorIterator<AMineActor> It(GetWorld()); It; ++It)
+					{
+						const float D = FVector::Dist((*It)->GetActorLocation(), S.CurrentTargetMineLocation);
+						if (D < BestDist) { BestDist = D; BestMine = *It; }
+					}
+					if (BestMine)
+					{
+						Spawned->CurrentTarget  = BestMine;
+						Spawned->PrimaryTarget  = BestMine;
+						Spawned->bHasTarget     = true;
+						Spawned->SetTargetLocation(BestMine->GetActorLocation());
+					}
+				}
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Destroy all in-flight projectiles (stale on reload)
+	// ------------------------------------------------------------------
+	for (TActorIterator<AProjectileActor> It(GetWorld()); It; ++It)
+	{
+		if (*It) (*It)->Destroy();
+	}
+
+	// ------------------------------------------------------------------
+	// Symmetric relationships (Disposition)
+	// ------------------------------------------------------------------
+	Relationships.Empty();
+	for (const FRelationshipSave& S : Save->RelationshipStates)
+	{
+		const EOwnerTeam T1 = static_cast<EOwnerTeam>(S.Team1);
+		const EOwnerTeam T2 = static_cast<EOwnerTeam>(S.Team2);
+		const uint32 Key = MakeRelationshipKey(T1, T2);
+
+		FTeamRelationship& Rel = Relationships.FindOrAdd(Key);
+		Rel.BaseDisposition                    = S.BaseDisposition;
+		Rel.NeutralResourcesTakenInTerritory   = S.NeutralResourcesTaken;
+		Rel.TradeCount                         = S.TradeCount;
+		Rel.BribeCount                         = S.BribeCount;
+		Rel.AllianceBonuses.Empty();
+		for (uint8 Byte : S.AllianceBonuses)        Rel.AllianceBonuses.Add(static_cast<EOwnerTeam>(Byte));
+		Rel.MutualEnemyBonusesApplied.Empty();
+		for (uint8 Byte : S.MutualEnemyBonuses) Rel.MutualEnemyBonusesApplied.Add(static_cast<EOwnerTeam>(Byte));
+	}
+
+	// ------------------------------------------------------------------
+	// Asymmetric Fear + Respect
+	// ------------------------------------------------------------------
+	FearValues.Empty();
+	RespectValues.Empty();
+	for (const FAsymmetricRelSave& S : Save->AsymmetricRelStates)
+	{
+		const EOwnerTeam From = static_cast<EOwnerTeam>(S.FromTeam);
+		const EOwnerTeam To   = static_cast<EOwnerTeam>(S.ToTeam);
+		const uint32 Key = MakeDirectionalKey(From, To);
+		if (S.Fear    != 0.f) FearValues.Add(Key,    S.Fear);
+		if (S.Respect != 0.f) RespectValues.Add(Key, S.Respect);
+	}
 }

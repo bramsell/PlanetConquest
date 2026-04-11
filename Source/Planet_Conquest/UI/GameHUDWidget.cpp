@@ -1,6 +1,7 @@
 // Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "GameHUDWidget.h"
+#include "PauseMenuWidget.h"
 #include "../Core/PlanetConquestPlayerController.h"
 #include "../Core/PlanetConquestGameMode.h"
 #include "../Core/AITeamController.h"
@@ -111,7 +112,7 @@ void UGameHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	if (AlliancesUpdateTimer >= 5.0f)
 	{
 		AlliancesUpdateTimer = 0.0f;
-		UpdateAlliancesDisplay();
+		ComputeAlliancesText();
 	}
 	
 	// Update minimap city markers
@@ -132,7 +133,7 @@ void UGameHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 		AIDebugUpdateTimer += InDeltaTime;
 		if (AIDebugUpdateTimer >= 3.0f)
 		{
-			UpdateAIDebugDisplay();
+			ComputeAIDebugText();
 			AIDebugUpdateTimer = 0.0f;
 		}
 	}
@@ -279,6 +280,252 @@ void UGameHUDWidget::ToggleVehicleEfficiency()
 	
 	UE_LOG(LogTemp, Warning, TEXT("ToggleVehicleEfficiency button clicked!"));
 	PC->ToggleVehicleEfficiency();
+}
+
+void UGameHUDWidget::ComputeAlliancesText()
+{
+	APlanetConquestGameMode* GameMode = Cast<APlanetConquestGameMode>(UGameplayStatics::GetGameMode(GetWorld()));
+	if (!GameMode) return;
+
+	TMap<FString, TArray<EOwnerTeam>> Alliances;
+	TArray<EOwnerTeam> UnalignedTeams;
+
+	const FString PlayerAlliance = GameMode->GetPlayerAllianceName();
+	if (PlayerAlliance.IsEmpty() || PlayerAlliance == TEXT("No Alliance") || PlayerAlliance == TEXT("No Allegiance"))
+		UnalignedTeams.Add(EOwnerTeam::Player);
+	else
+		Alliances.FindOrAdd(PlayerAlliance).Add(EOwnerTeam::Player);
+
+	for (TActorIterator<AAITeamController> It(GetWorld()); It; ++It)
+	{
+		AAITeamController* AI = *It;
+		if (AI && AI->ControlledTeam != EOwnerTeam::Neutral)
+		{
+			if (AI->AllianceState.AllianceName.IsEmpty())
+				UnalignedTeams.Add(AI->ControlledTeam);
+			else
+				Alliances.FindOrAdd(AI->AllianceState.AllianceName).Add(AI->ControlledTeam);
+		}
+	}
+
+	FString Content;
+	for (const auto& AlliancePair : Alliances)
+	{
+		const FString& AllianceName = AlliancePair.Key;
+		const TArray<EOwnerTeam>& Teams = AlliancePair.Value;
+		if (AllianceName == TEXT("No Alliance") || AllianceName == TEXT("No Allegiance")) continue;
+
+		float Total = 0.f; int32 RelCount = 0;
+		for (EOwnerTeam Team : Teams)
+			if (Team != EOwnerTeam::Player) { Total += GameMode->GetDisposition(EOwnerTeam::Player, Team); RelCount++; }
+
+		Content += RelCount > 0
+			? FString::Printf(TEXT("[%s]  Avg Rel:%.0f\n"), *AllianceName, Total / RelCount)
+			: FString::Printf(TEXT("[%s]\n"), *AllianceName);
+
+		for (EOwnerTeam Team : Teams)
+		{
+			int32 CityCount = 0;
+			for (TActorIterator<ACityActor> CityIt(GetWorld()); CityIt; ++CityIt)
+				if (CityIt->OwnerTeam == Team) CityCount++;
+			if (CityCount == 0) continue;
+			const FString TName = (Team == EOwnerTeam::Player) ? TEXT("You") : FString::Printf(TEXT("AI %d"), (int32)Team);
+			if (Team == EOwnerTeam::Player)
+				Content += FString::Printf(TEXT("  %s - %d cities\n"), *TName, CityCount);
+			else
+				Content += FString::Printf(TEXT("  %s - %d cities (Rel:%.0f)\n"), *TName, CityCount, GameMode->GetDisposition(EOwnerTeam::Player, Team));
+		}
+	}
+
+	if (UnalignedTeams.Num() > 0)
+	{
+		Content += TEXT("Unaligned:\n");
+		for (EOwnerTeam Team : UnalignedTeams)
+		{
+			int32 CityCount = 0;
+			for (TActorIterator<ACityActor> CityIt(GetWorld()); CityIt; ++CityIt)
+				if (CityIt->OwnerTeam == Team) CityCount++;
+			if (CityCount == 0) continue;
+			const FString TName = (Team == EOwnerTeam::Player) ? TEXT("You") : FString::Printf(TEXT("AI %d"), (int32)Team);
+			if (Team == EOwnerTeam::Player)
+				Content += FString::Printf(TEXT("  %s - %d cities\n"), *TName, CityCount);
+			else
+				Content += FString::Printf(TEXT("  %s - %d cities (%.0f)\n"), *TName, CityCount, GameMode->GetDisposition(EOwnerTeam::Player, Team));
+		}
+	}
+
+	Content.TrimEndInline();
+	const uint32 NewHash = GetTypeHash(Content);
+	if (NewHash != CachedAlliancesHash)
+	{
+		CachedAlliancesHash = NewHash;
+		AlliancesDisplayText = FText::FromString(Content);
+	}
+}
+
+void UGameHUDWidget::ComputeAIDebugText()
+{
+	AAITeamController* TargetAI = nullptr;
+	const EOwnerTeam TargetTeam = static_cast<EOwnerTeam>(DebugAITeamIndex);
+	for (TActorIterator<AAITeamController> It(GetWorld()); It; ++It)
+		if ((*It)->ControlledTeam == TargetTeam) { TargetAI = *It; break; }
+
+	if (!TargetAI)
+	{
+		if (CachedDebugTeamIndex != -2)
+		{
+			AIDebugDisplayText = FText::FromString(TEXT("No AI found for this team"));
+			CachedDebugTeamIndex = -2;
+		}
+		return;
+	}
+
+	const int32 CurrentOrangeSubstrate = TargetAI->OrangeSubstrate;
+	const int32 CurrentBlackSubstrate  = TargetAI->BlackSubstrate;
+	TArray<AVehicleActor*> AllVehicles  = TargetAI->GetControlledVehicles();
+	const int32 CurrentTotalVehicles    = AllVehicles.Num();
+
+	struct FPriorityInfo { FString Name; int32 VehicleCount = 0; TMap<FString,int32> SubPriorities; };
+	TArray<FPriorityInfo> Priorities;
+	Priorities.SetNum(5);
+	Priorities[0].Name = TEXT("P1: Survival");
+	Priorities[1].Name = TEXT("P2: Income");
+	Priorities[2].Name = TEXT("P3: Defense");
+	Priorities[3].Name = TEXT("P4: War");
+	Priorities[4].Name = TEXT("P5: Aid");
+
+	for (AVehicleActor* Vehicle : AllVehicles)
+	{
+		if (!Vehicle) continue;
+		const EVehicleTaskType TaskType = Vehicle->CurrentTask.Type;
+		const int32 TaskPriority = Vehicle->CurrentTask.Priority;
+		if (Vehicle->bInP1 || TaskType == EVehicleTaskType::DefendTerritory)
+		{
+			Priorities[0].VehicleCount++;
+			Priorities[0].SubPriorities.FindOrAdd(FString::Printf(TEXT("Task:%d bInP1:%d"), (int32)TaskType, Vehicle->bInP1 ? 1 : 0))++;
+		}
+		else if (TaskType == EVehicleTaskType::SecureIncome || Vehicle->bInP2)
+		{
+			Priorities[1].VehicleCount++;
+			FString SubPriority;
+			if (!Vehicle->CurrentTask.SubPriorityLabel.IsEmpty())
+				SubPriority = FString::Printf(TEXT("%s (%.0f)"), *Vehicle->CurrentTask.SubPriorityLabel, Vehicle->CurrentTask.SearchRadius);
+			else if (Vehicle->CurrentTask.PrimaryTarget.IsValid())
+				SubPriority = FString::Printf(TEXT("Intrusion (%.0f)"), Vehicle->CurrentTask.SearchRadius);
+			else
+				SubPriority = FString::Printf(TEXT("R:%.0f"), Vehicle->CurrentTask.SearchRadius);
+			Priorities[1].SubPriorities.FindOrAdd(SubPriority)++;
+		}
+		else if (TaskType == EVehicleTaskType::AttackTarget && TaskPriority == 4)
+		{
+			Priorities[3].VehicleCount++;
+			const FString TgtName = Vehicle->CurrentTask.PrimaryTarget.IsValid() ? Vehicle->CurrentTask.PrimaryTarget.Get()->GetName() : TEXT("None");
+			Priorities[3].SubPriorities.FindOrAdd(FString::Printf(TEXT("Attack (Target:%s)"), *TgtName))++;
+		}
+		else if (TaskType == EVehicleTaskType::AidAlly || TaskPriority == 5)
+		{
+			Priorities[4].VehicleCount++;
+			Priorities[4].SubPriorities.FindOrAdd(FString::Printf(TEXT("Task:%d Pri:%d"), (int32)TaskType, TaskPriority))++;
+		}
+	}
+
+	int32 IdleVehicleCount = 0;
+	for (AVehicleActor* V : AllVehicles)
+		if (V && V->IsIdle()) IdleVehicleCount++;
+
+	TMap<FString,int32> CurrentPriorityCounts;
+	for (const FPriorityInfo& PInfo : Priorities)
+		CurrentPriorityCounts.Add(PInfo.Name, PInfo.VehicleCount);
+	CurrentPriorityCounts.Add(TEXT("Idle"), IdleVehicleCount);
+
+	const bool bNeedsUpdate =
+		(CachedDebugTeamIndex        != DebugAITeamIndex) ||
+		(CachedOrangeSubstrate       != CurrentOrangeSubstrate) ||
+		(CachedBlackSubstrate        != CurrentBlackSubstrate) ||
+		(CachedOrangeIncome          != TargetAI->OrangeIncomePerCycle) ||
+		(CachedBlackIncome           != TargetAI->BlackIncomePerCycle) ||
+		(CachedRequiredOrangeIncome  != TargetAI->GetRequiredOrangeIncome()) ||
+		(CachedRequiredBlackIncome   != TargetAI->GetRequiredBlackIncome()) ||
+		(CachedTotalVehicles         != CurrentTotalVehicles) ||
+		!CachedPriorityCounts.OrderIndependentCompareEqual(CurrentPriorityCounts);
+	if (!bNeedsUpdate) return;
+
+	CachedDebugTeamIndex       = DebugAITeamIndex;
+	CachedOrangeSubstrate      = CurrentOrangeSubstrate;
+	CachedBlackSubstrate       = CurrentBlackSubstrate;
+	CachedOrangeIncome         = TargetAI->OrangeIncomePerCycle;
+	CachedBlackIncome          = TargetAI->BlackIncomePerCycle;
+	CachedRequiredOrangeIncome = TargetAI->GetRequiredOrangeIncome();
+	CachedRequiredBlackIncome  = TargetAI->GetRequiredBlackIncome();
+	CachedTotalVehicles        = CurrentTotalVehicles;
+	CachedPriorityCounts       = CurrentPriorityCounts;
+
+	FString Content;
+	Content += FString::Printf(TEXT("AI Team %d\n"), (int32)TargetTeam);
+	Content += FString::Printf(TEXT("Stockpile: OS:%d  BS:%d\n"), CurrentOrangeSubstrate, CurrentBlackSubstrate);
+	Content += FString::Printf(TEXT("Income/cycle: OS:%d/%d  BS:%d/%d\n"),
+		TargetAI->OrangeIncomePerCycle, TargetAI->GetRequiredOrangeIncome(),
+		TargetAI->BlackIncomePerCycle,  TargetAI->GetRequiredBlackIncome());
+
+	if (TargetAI->GetControlledCities().Num() > 0)
+	{
+		int32 EnemyOrange = 0, EnemyBlack = 0;
+		for (AMineActor* Mine : TargetAI->CachedP23EnemyMines)
+		{
+			if (Mine && Mine->TargetResource)
+			{
+				if      (Mine->TargetResource->ResourceType == EResourceType::OrangeSubstrate) EnemyOrange++;
+				else if (Mine->TargetResource->ResourceType == EResourceType::BlackSubstrate)  EnemyBlack++;
+			}
+		}
+		Content += FString::Printf(TEXT("Zone 0-%.0fk: %d/%d unclaimed\n"),
+			TargetAI->CachedEasyIncomeRadius / 1000.f,
+			TargetAI->CachedUnclaimedResourcesInZone, TargetAI->CachedTotalResourcesInZone);
+		Content += FString::Printf(TEXT("  Enemy mines: OS:%d  BS:%d\n"), EnemyOrange, EnemyBlack);
+	}
+
+	Content += FString::Printf(TEXT("Vehicles: %d\n"), CurrentTotalVehicles);
+
+	for (int32 i = 0; i < Priorities.Num(); i++)
+	{
+		const FPriorityInfo& PInfo = Priorities[i];
+		const bool bActive = (i == 2 && TargetAI) ? (TargetAI->ReservedOrangeSubstrate > 0) : (PInfo.VehicleCount > 0);
+		Content += FString::Printf(TEXT("%s %s (%d)\n"), bActive ? TEXT("*") : TEXT("-"), *PInfo.Name, PInfo.VehicleCount);
+		for (const auto& Sub : PInfo.SubPriorities)
+		{
+			Content += FString::Printf(TEXT("  %s: %d\n"), *Sub.Key, Sub.Value);
+			if (i == 3 || i == 4)
+			{
+				for (AVehicleActor* V : AllVehicles)
+				{
+					if (!V) continue;
+					const EVehicleTaskType TT = V->CurrentTask.Type;
+					const int32 TP = V->CurrentTask.Priority;
+					const bool bP4 = (i == 3 && TT == EVehicleTaskType::AttackTarget && TP == 4);
+					const bool bP5 = (i == 4 && (TT == EVehicleTaskType::AidAlly || TP == 5));
+					if (!bP4 && !bP5) continue;
+					const FString CurTgt = V->CurrentTarget  ? V->CurrentTarget->GetName()  : TEXT("None");
+					const FString PriTgt = V->PrimaryTarget  ? V->PrimaryTarget->GetName()  : TEXT("None");
+					const FString Err    = V->LastPathfindingError.IsEmpty() ? TEXT("") :
+						FString::Printf(TEXT(" ERR:%s"), *V->LastPathfindingError);
+					Content += FString::Printf(TEXT("    %s Cur:%s Pri:%s Path:%d%s\n"),
+						*V->GetName(), *CurTgt, *PriTgt, V->CurrentPath.Num(), *Err);
+				}
+			}
+		}
+	}
+
+	if (IdleVehicleCount > 0)
+		Content += FString::Printf(TEXT("Idle (%d)\n"), IdleVehicleCount);
+
+	int32 Accounted = IdleVehicleCount;
+	for (const FPriorityInfo& PInfo : Priorities) Accounted += PInfo.VehicleCount;
+	const int32 Unaccounted = CurrentTotalVehicles - Accounted;
+	if (Unaccounted != 0)
+		Content += FString::Printf(TEXT("UNACCOUNTED: %d vehicles!\n"), Unaccounted);
+
+	Content.TrimEndInline();
+	AIDebugDisplayText = FText::FromString(Content);
 }
 
 void UGameHUDWidget::UpdateAlliancesDisplay()
@@ -1072,4 +1319,36 @@ int32 UGameHUDWidget::GetCityCountForTeam(uint8 TeamIndex) const
 		}
 	}
 	return Count;
+}
+
+void UGameHUDWidget::OpenPauseMenu()
+{
+	// Toggle: if the pause menu is open, close it cleanly via ResumeGame()
+	if (ActivePauseMenuInstance && ActivePauseMenuInstance->IsInViewport())
+	{
+		if (UPauseMenuWidget* PM = Cast<UPauseMenuWidget>(ActivePauseMenuInstance))
+		{
+			PM->ResumeGame();
+		}
+		ActivePauseMenuInstance = nullptr;
+		return;
+	}
+
+	if (!PauseMenuWidgetClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GameHUDWidget: PauseMenuWidgetClass is not set! Assign WBP_PauseMenu in the WBP_GameHUD Blueprint Class Defaults."));
+		return;
+	}
+
+	APlayerController* PC = GetOwningPlayer();
+	if (!PC)
+	{
+		return;
+	}
+
+	ActivePauseMenuInstance = CreateWidget<UUserWidget>(PC, PauseMenuWidgetClass);
+	if (ActivePauseMenuInstance)
+	{
+		ActivePauseMenuInstance->AddToViewport(10); // Higher Z-order than the HUD
+	}
 }

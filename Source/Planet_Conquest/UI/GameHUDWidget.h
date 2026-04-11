@@ -59,13 +59,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void ToggleVehicleEfficiency();
 
-	// Container for alliance information (bind this in Blueprint)
-	UPROPERTY(meta = (BindWidget))
+	// Container for alliance information (kept as optional; now used as a parent for the text block below)
+	UPROPERTY(meta = (BindWidgetOptional))
 	class UVerticalBox* AlliancesContainer;
-	
-	// Container for AI debug information (bind this in Blueprint)
-	UPROPERTY(meta = (BindWidget))
+
+	// Container for AI debug information (kept as optional; now used as a parent for the text block below)
+	UPROPERTY(meta = (BindWidgetOptional))
 	class UVerticalBox* AIDebugContainer;
+
+	// Text-only outputs — bind a TextBlock's Text property to these in WBP_GameHUD.
+	// This eliminates the ClearChildren+NewObject pattern which crashes when Slate
+	// triggers a full paint invalidation pass (e.g. when TalkDialogueWidget opens).
+	UPROPERTY(BlueprintReadOnly, Category = "HUD")
+	FText AlliancesDisplayText;
+
+	UPROPERTY(BlueprintReadOnly, Category = "HUD")
+	FText AIDebugDisplayText;
 	
 	// Minimap canvas panel (contains terrain image + dynamic markers)
 	UPROPERTY(meta = (BindWidget))
@@ -121,11 +130,15 @@ private:
 	// Auto-update from player controller
 	void RefreshFromPlayerController();
 	
-	// Update alliances display
+	// Update alliances display (legacy — kept but no longer called)
 	void UpdateAlliancesDisplay();
-	
-	// Update AI debug display
+
+	// Update AI debug display (legacy — kept but no longer called)
 	void UpdateAIDebugDisplay();
+
+	// Crash-safe text-only replacements for the above
+	void ComputeAlliancesText();
+	void ComputeAIDebugText();
 
 public:
 	// Step the debug view to the next active AI team
@@ -153,6 +166,21 @@ public:
 	// HUDCachedCities in Blueprint when you only need a count.
 	UFUNCTION(BlueprintPure, Category = "HUD|Cache")
 	int32 GetCityCountForTeam(uint8 TeamIndex) const;
+
+	// ===== PAUSE MENU =====
+
+	/** The pause menu widget class to spawn. Set to WBP_PauseMenu in Blueprint Class Defaults. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Menu")
+	TSubclassOf<UUserWidget> PauseMenuWidgetClass;
+
+	/** Tracking instance so ESC can close the open pause menu. */
+	UPROPERTY()
+	UUserWidget* ActivePauseMenuInstance = nullptr;
+
+	/** Opens the pause menu if closed, closes it if already open.
+	 *  Bind the HUD pause button OnClicked to this, and ESC key calls it via PlayerController. */
+	UFUNCTION(BlueprintCallable, Category = "Menu")
+	void OpenPauseMenu();
 
 private:
 	float HUDActorCacheTimer = 999.0f; // Forces immediate refresh on first tick

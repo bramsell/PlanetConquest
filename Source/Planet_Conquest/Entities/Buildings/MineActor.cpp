@@ -15,7 +15,10 @@ AMineActor::AMineActor()
 {
 	// Enable ticking
 	PrimaryActorTick.bCanEverTick = true;
-	
+
+	// Identify this building type so save/load can distinguish mines from other buildings
+	BuildingType = EBuildingType::Mine;
+
 	// Set health to match vehicles
 	MaxHealth = 100.0f;
 	CurrentHealth = 100.0f;

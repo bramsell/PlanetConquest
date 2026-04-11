@@ -225,4 +225,7 @@ public:
 	// Controlled cities list
 	UPROPERTY(BlueprintReadOnly, Category = "Cities")
 	TArray<class ACityActor*> ControlledCities;
+
+	// ESC key handler — toggles the pause menu open/closed
+	void HandleEscapeKey();
 };

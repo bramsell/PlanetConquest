@@ -31,7 +31,14 @@ APlanetConquestPlayerController::APlanetConquestPlayerController()
 void APlanetConquestPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
+	// Reset input mode to game when entering the game world.
+	// The main menu sets UI-only input; this clears that on level transition.
+	FInputModeGameAndUI InputMode;
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+
 	// Force reset BlackSubstrateMode to Efficient if invalid (handles old cached enum values)
 	int32 RawModeValue = static_cast<int32>(BlackSubstrateMode);
 	if (RawModeValue < 0 || RawModeValue > 2)
@@ -136,6 +143,17 @@ void APlanetConquestPlayerController::SetupInputComponent()
 		// Bind right mouse button for panning
 		InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &APlanetConquestPlayerController::HandleRightClick);
 		InputComponent->BindKey(EKeys::RightMouseButton, IE_Released, this, &APlanetConquestPlayerController::HandleRightClickRelease);
+
+		// ESC toggles the pause menu
+		InputComponent->BindKey(EKeys::Escape, IE_Pressed, this, &APlanetConquestPlayerController::HandleEscapeKey);
+	}
+}
+
+void APlanetConquestPlayerController::HandleEscapeKey()
+{
+	if (GameHUDWidgetInstance)
+	{
+		GameHUDWidgetInstance->OpenPauseMenu();
 	}
 }
 

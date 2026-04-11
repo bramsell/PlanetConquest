@@ -1,6 +1,9 @@
 // Copyright Benjamin Ramsell. All Rights Reserved.
 
 #include "PlanetActor.h"
+#include "../Core/PlanetConquestSaveGame.h"
+#include "../Core/PlanetConquestGameInstance.h"
+#include "Kismet/GameplayStatics.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -15,6 +18,7 @@
 #include "../Entities/Buildings/MineActor.h"
 #include "../Core/PlanetConquestPlayerController.h"
 #include "../Core/AITeamController.h"
+#include "../Core/PlanetConquestGameMode.h"
 
 // =============================================================================
 // DEBUG CONFIG — toggle these to enable/disable debug visualizations and logs
@@ -181,8 +185,69 @@ void APlanetActor::BeginPlay()
 	// Generate navigation graph for vehicle pathfinding (must be after cities are spawned)
 	GenerateNavGraph();
 
+	// -----------------------------------------------------------------
+	// Seed initialisation: load from save on subsequent runs, or
+	// generate + save on first run.  Must happen before any RNG use.
+	// -----------------------------------------------------------------
+
+	// Ask the GameInstance which slot is active.
+	FString SeedSlot = TEXT("PlanetConquest_Save_0"); // safe fallback
+	bool bIsLoadingGame  = false;
+	bool bCameFromMenu   = false;
+	if (UPlanetConquestGameInstance* GI = Cast<UPlanetConquestGameInstance>(GetGameInstance()))
+	{
+		SeedSlot       = GI->GetActiveSlotName();
+		bIsLoadingGame = GI->bLoadingExistingGame;
+		bCameFromMenu  = GI->bSlotWasSetByMenu;
+	}
+
+	// Decide whether to load an existing seed or generate a fresh one:
+	//   - Came from menu "Load Game"           → load
+	//   - Direct PIE launch (no menu) + save exists → load (preserves seed between Play sessions)
+	//   - Came from menu "New Game"            → generate new seed (intentional overwrite)
+	//   - No save exists yet                   → generate new seed
+	const bool bSaveExists = UGameplayStatics::DoesSaveGameExist(SeedSlot, 0);
+	const bool bShouldLoad = bIsLoadingGame || (!bCameFromMenu && bSaveExists);
+
+	if (bShouldLoad)
+	{
+		if (UPlanetConquestSaveGame* LoadedSave = Cast<UPlanetConquestSaveGame>(
+			UGameplayStatics::LoadGameFromSlot(SeedSlot, 0)))
+		{
+			if (LoadedSave->bSeedInitialised)
+			{
+				NoiseSeed = LoadedSave->PlanetSeed;
+				UE_LOG(LogTemp, Log, TEXT("PlanetActor: loaded NoiseSeed %d from slot '%s'"),
+					NoiseSeed, *SeedSlot);
+			}
+		}
+	}
+	else
+	{
+		// New game — generate a fresh seed and write it to the chosen slot immediately.
+		if (NoiseSeed == 0)
+		{
+			NoiseSeed = FMath::Rand();
+		}
+		UPlanetConquestSaveGame* NewSave = Cast<UPlanetConquestSaveGame>(
+			UGameplayStatics::CreateSaveGameObject(UPlanetConquestSaveGame::StaticClass()));
+		if (NewSave)
+		{
+			NewSave->PlanetSeed       = NoiseSeed;
+			NewSave->bSeedInitialised = true;
+			NewSave->LastSaved        = FDateTime::Now();
+			UGameplayStatics::SaveGameToSlot(NewSave, SeedSlot, 0);
+			UE_LOG(LogTemp, Log, TEXT("PlanetActor: new game — saved NoiseSeed %d to slot '%s'"),
+				NoiseSeed, *SeedSlot);
+		}
+	}
+
+	// Resource RNG — seeded independently from NoiseSeed so placement is
+	// deterministic but distinct from the continent-placement sequence.
+	FRandomStream ResourceRNG(NoiseSeed ^ 0x5F3759DF);
+
 	// Spawn territory resources around each city
-	SpawnResourcesAroundPlanet();
+	SpawnResourcesAroundPlanet(ResourceRNG);
 
 	// Spawn AI controllers for AI teams
 	TArray<EOwnerTeam> AITeams;
@@ -263,6 +328,21 @@ void APlanetActor::BeginPlay()
 	// Generate minimap texture for HUD
 	GenerateMinimapTexture(512, 256);
 	UE_LOG(LogTemp, Log, TEXT("Minimap texture auto-generated at startup"));
+
+	// -----------------------------------------------------------------
+	// World state restore (must run after ALL entities are spawned)
+	// -----------------------------------------------------------------
+	if (bShouldLoad)
+	{
+		if (UPlanetConquestSaveGame* WorldSave = Cast<UPlanetConquestSaveGame>(
+			UGameplayStatics::LoadGameFromSlot(SeedSlot, 0)))
+		{
+			if (APlanetConquestGameMode* GM = Cast<APlanetConquestGameMode>(GetWorld()->GetAuthGameMode()))
+			{
+				GM->ApplyWorldState(WorldSave);
+			}
+		}
+	}
 }
 
 void APlanetActor::Tick(float DeltaTime)
@@ -1801,7 +1881,7 @@ void APlanetActor::SpawnCities()
 	}
 }
 
-void APlanetActor::SpawnResourcesAroundPlanet()
+void APlanetActor::SpawnResourcesAroundPlanet(FRandomStream& RNG)
 {
 	if (NumberOfResourcesAtStart <= 0)
 	{
@@ -1845,7 +1925,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 			if (CityIndex == 0)
 			{
 				// First city: random choice
-				bBlackIsScarce = FMath::RandBool();
+				bBlackIsScarce = RNG.RandRange(0, 1) == 1;
 				if (bBlackIsScarce)
 					bHasBlackDominant = true;
 				else
@@ -1863,13 +1943,13 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 			else
 			{
 				// Rest can be random
-				bBlackIsScarce = FMath::RandBool();
+				bBlackIsScarce = RNG.RandRange(0, 1) == 1;
 			}
 			
 			// Determine exact counts
-			int32 GreenCount = FMath::RandRange(1, 2);
-			int32 ScarceCount = FMath::RandRange(1, 2);
-			int32 AbundantCount = FMath::RandRange(5, 6);
+			int32 GreenCount = RNG.RandRange(1, 2);
+			int32 ScarceCount = RNG.RandRange(1, 2);
+			int32 AbundantCount = RNG.RandRange(5, 6);
 			int32 TotalResourcesForCity = GreenCount + ScarceCount + AbundantCount;
 			
 			UE_LOG(LogTemp, Log, TEXT("City %s territory will spawn: %d green, %d %s (scarce), %d %s (abundant)"), 
@@ -1915,7 +1995,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 					FVector CityDirection = (CityLocation - PlanetCenter).GetSafeNormal();
 
 					// Generate random distance from city (guaranteed resources spawn: 3000-5000)
-					float DistanceFromCity = FMath::FRandRange(3000.0f, 5000.0f);
+					float DistanceFromCity = RNG.FRandRange(3000.0f, 5000.0f);
 
 					// Create tangent vectors for random direction around city
 					FVector Tangent1 = FVector::CrossProduct(CityDirection, FVector::UpVector).GetSafeNormal();
@@ -1926,7 +2006,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 					FVector Tangent2 = FVector::CrossProduct(CityDirection, Tangent1).GetSafeNormal();
 
 					// Random angle around the city
-					float RandomAngle = FMath::FRandRange(0.0f, 2.0f * PI);
+					float RandomAngle = RNG.FRandRange(0.0f, 2.0f * PI);
 
 					// Calculate offset in tangent space
 					FVector Offset = (Tangent1 * FMath::Cos(RandomAngle) + Tangent2 * FMath::Sin(RandomAngle)) * DistanceFromCity;
@@ -2004,7 +2084,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 						{
 							// Green substrate: random between 10, 25, 40
 							int32 Choices[] = {10, 25, 40};
-							IncomeValue = Choices[FMath::RandRange(0, 2)];
+							IncomeValue = Choices[RNG.RandRange(0, 2)];
 						}
 						else if (ResourceType == ScarceType)
 						{
@@ -2013,20 +2093,20 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 							{
 								// If only 1 scarce resource, must be at least 25, max 40
 								int32 Choices[] = {25, 40};
-								IncomeValue = Choices[FMath::RandRange(0, 1)];
+								IncomeValue = Choices[RNG.RandRange(0, 1)];
 							}
 							else
 							{
 								// If 2 scarce resources, can be anything up to 40
 								int32 Choices[] = {10, 25, 40};
-								IncomeValue = Choices[FMath::RandRange(0, 2)];
+								IncomeValue = Choices[RNG.RandRange(0, 2)];
 							}
 						}
 						else
 						{
 							// Abundant substrate: can be anything up to 40
 							int32 Choices[] = {10, 25, 40};
-							IncomeValue = Choices[FMath::RandRange(0, 2)];
+							IncomeValue = Choices[RNG.RandRange(0, 2)];
 						}
 						
 						// Set income and size based on income value
@@ -2131,10 +2211,10 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 		{
 			// Determine cluster size first (before finding location)
 			int32 ResourcesInCluster;
-			float Roll = FMath::FRand();
+			float Roll = RNG.GetFraction();
 			if (Roll < 0.60f) // 60% chance
 			{
-				ResourcesInCluster = FMath::RandRange(2, 3); // 2 or 3 resources (most common)
+				ResourcesInCluster = RNG.RandRange(2, 3); // 2 or 3 resources (most common)
 			}
 			else if (Roll < 0.90f) // 30% chance
 			{
@@ -2152,7 +2232,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 			for (int32 Attempt = 0; Attempt < MaxAttemptsPerResource * 2; ++Attempt)
 			{
 				// Generate random point within cone around continent center (40 degrees)
-				float RandomAngleDegrees = FMath::FRandRange(0.0f, 40.0f);
+				float RandomAngleDegrees = RNG.FRandRange(0.0f, 40.0f);
 				float RandomAngleRadians = FMath::DegreesToRadians(RandomAngleDegrees);
 				
 				// Create tangent vectors
@@ -2164,7 +2244,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 				FVector Tangent2 = FVector::CrossProduct(ContinentCenter, Tangent1).GetSafeNormal();
 				
 				// Random rotation around continent center
-				float RandomRotation = FMath::FRandRange(0.0f, 2.0f * PI);
+				float RandomRotation = RNG.FRandRange(0.0f, 2.0f * PI);
 				FVector TangentDirection = Tangent1 * FMath::Cos(RandomRotation) + Tangent2 * FMath::Sin(RandomRotation);
 				
 				// Slerp between continent center and tangent direction
@@ -2249,8 +2329,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 			ClusterLocations.Add(ClusterCenter);
 			
 			// Cluster type: 75% orange, 25% black substrate
-			EResourceType ClusterType = (FMath::FRand() < 0.75f) ? EResourceType::OrangeSubstrate : EResourceType::BlackSubstrate;
-			
+		EResourceType ClusterType = (RNG.GetFraction() < 0.75f) ? EResourceType::OrangeSubstrate : EResourceType::BlackSubstrate;
 			int32 SuccessfulClusterSpawns = 0;
 		
 		// Spawn all resources in this cluster
@@ -2274,8 +2353,8 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 				FVector Tangent2 = FVector::CrossProduct(ClusterDirection, Tangent1).GetSafeNormal();
 				
 				// Random offset within cluster (small radius for tight grouping)
-				float OffsetDistance = FMath::FRandRange(0.0f, ResourceSpacingInCluster);
-				float RandomAngle = FMath::FRandRange(0.0f, 2.0f * PI);
+				float OffsetDistance = RNG.FRandRange(0.0f, ResourceSpacingInCluster);
+				float RandomAngle = RNG.FRandRange(0.0f, 2.0f * PI);
 				FVector Offset = (Tangent1 * FMath::Cos(RandomAngle) + Tangent2 * FMath::Sin(RandomAngle)) * OffsetDistance;
 				
 				// Project onto planet surface
@@ -2332,7 +2411,7 @@ void APlanetActor::SpawnResourcesAroundPlanet()
 					
 					// Cluster resources have random income (10, 25, or 40)
 					int32 Choices[] = {10, 25, 40};
-					int32 IncomeValue = Choices[FMath::RandRange(0, 2)];
+					int32 IncomeValue = Choices[RNG.RandRange(0, 2)];
 					NewResource->IncomePerInterval = IncomeValue;
 					
 					// Size scaling based on income

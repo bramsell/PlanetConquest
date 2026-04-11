@@ -13,7 +13,8 @@ enum class EBuildingType : uint8
 	Capital,
 	Factory,
 	Turret,
-	Lab
+	Lab,
+	Mine
 };
 
 UCLASS()

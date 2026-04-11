@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "../Entities/Resources/ResourceActor.h"
+#include "PlanetConquestSaveGame.h"
 #include "PlanetConquestGameMode.generated.h"
 
 /**
@@ -235,6 +236,14 @@ public:
 	// Count how many cities a team owns
 	UFUNCTION(BlueprintPure, Category = "Relationships")
 	int32 CountCitiesForTeam(EOwnerTeam Team) const;
+
+	// ========== WORLD STATE SERIALISATION ==========
+
+	/** Snapshot all entities and diplomacy into Save. Called from PauseMenuWidget::SaveGame(). */
+	void CollectWorldState(UPlanetConquestSaveGame* Save);
+
+	/** Restore entities and diplomacy from Save. Called from PlanetActor::BeginPlay() after all actors spawn. */
+	void ApplyWorldState(const UPlanetConquestSaveGame* Save);
 
 protected:
 	// Relationship storage for symmetric values (Disposition only)

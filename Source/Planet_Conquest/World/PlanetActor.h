@@ -482,5 +482,6 @@ private:
 	void SpawnCities();
 
 	// Spawn territory resources around cities
-	void SpawnResourcesAroundPlanet();
+	// RNG must be seeded from NoiseSeed so resource placement is deterministic on load.
+	void SpawnResourcesAroundPlanet(FRandomStream& RNG);
 };
